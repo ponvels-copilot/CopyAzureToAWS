@@ -3,31 +3,133 @@ AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 Description: CopyAzureToAWS API - REST API Private
 
+Parameters:
+  EnvType:
+    Description: Environment type.
+    Type: String
+    AllowedValues: [dev, prod, qa]
+    Default: dev
+  Client:
+    Description: Client Info.
+    Type: String
+    AllowedValues: [iqor]
+    Default: iqor
+  Product:
+    Description: Product Info.
+    Type: String
+    AllowedValues: [qatch]
+    Default: qatch
+  Owner:
+    Description: Owner Info.
+    Type: String
+    AllowedValues: [sathya.ramakrishnan]
+    Default: sathya.ramakrishnan
+  CreatedBy:
+    Description: Creator Info.
+    Type: String
+    AllowedValues: [ponvel.shanmuganatha, arun.selvan]
+    Default: ponvel.shanmuganatha
+  UpdatedBy:
+    Description: Updator Info.
+    Type: String
+    AllowedValues: [ponvel.shanmuganatha, arun.selvan]
+    Default: ponvel.shanmuganatha
+  Project:
+    Description: Project Info.
+    Type: String
+    AllowedValues: [qatch]
+    Default: qatch
+  MapMigrated:
+    Description: Map migrated value for aws.
+    Type: String
+    AllowedValues: [d-server-03od8pt5fvt8yh]
+    Default: d-server-03od8pt5fvt8yh
+
 Globals:
   Function:
     Runtime: dotnet8
     MemorySize: 1024
     Timeout: 30
-    Tracing: Active
+    Tracing: Active  # Lambda X-Ray tracing
 
 Resources:
+  # Allow API Gateway to push execution logs to CloudWatch Logs (account-level)
+  ApiGatewayCloudWatchRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub apigw-cwlogs-role-${AWS::StackName}
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: apigateway.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonAPIGatewayPushToCloudWatchLogs
+
+  ApiGatewayAccount:
+    Type: AWS::ApiGateway::Account
+    Properties:
+      CloudWatchRoleArn: !GetAtt ApiGatewayCloudWatchRole.Arn
+
+  # Access log destination for API Gateway stage
+  RestApiAccessLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/apigw/${RestApiPrivate}-${EnvType}
+      RetentionInDays: 14
+
   RestApiPrivate:
     Type: AWS::Serverless::Api
     Properties:
       Name: copy-azure-to-aws-rest-private
-      StageName: prod
-      EndpointConfiguration: PRIVATE
+      StageName: !Ref EnvType
+      EndpointConfiguration:
+        Type: PRIVATE
+        VpcEndpointIds:
+          - vpce-0909347d01c0b50fc
+      TracingEnabled: true
+      MethodSettings:
+        - ResourcePath: "/*"
+          HttpMethod: "*"
+          LoggingLevel: INFO
+          DataTraceEnabled: true
+          MetricsEnabled: true
+      AccessLogSetting:
+        DestinationArn: !GetAtt RestApiAccessLogs.Arn
+        Format: '{ "requestId":"$context.requestId", "ip":"$context.identity.sourceIp", "caller":"$context.identity.caller", "user":"$context.identity.user", "requestTime":"$context.requestTime", "httpMethod":"$context.httpMethod", "resourcePath":"$context.resourcePath", "status":$context.status, "protocol":"$context.protocol", "responseLength":"$context.responseLength", "integrationStatus":"$context.integrationStatus", "integrationError":"$context.integrationErrorMessage", "xrayTraceId":"$context.xrayTraceId" }'
       Auth:
         ResourcePolicy:
           CustomStatements:
             - Effect: Allow
               Principal: "*"
               Action: execute-api:Invoke
-              Resource: execute-api:/*/*/*   # do not reference RestApiPrivate here
+              Resource: execute-api:/*/*/*
               Condition:
                 StringEquals:
                   aws:SourceVpce:
-                    - vpce-0909347d01c0b50fc    # replace/extend with your VPCe IDs
+                    - vpce-0909347d01c0b50fc
+    Tags:
+      - Key: Name
+        Value: copy-azure-to-aws-rest-private
+      - Key: Description
+        Value: API Gateway
+      - Key: map-migrated
+        Value: !Ref MapMigrated
+      - Key: Client
+        Value: !Ref Client
+      - Key: Product
+        Value: !Ref Product
+      - Key: Environment
+        Value: !Ref EnvType
+      - Key: Owner
+        Value: !Ref Owner
+      - Key: Project
+        Value: !Ref Project
+      - Key: CreatedBy
+        Value: !Ref CreatedBy
+      - Key: UpdatedBy
+        Value: !Ref UpdatedBy
 
   WebApiFunction:
     Type: AWS::Serverless::Function
@@ -42,15 +144,14 @@ Resources:
         - AWSLambdaVPCAccessExecutionRole
         - Statement:
             - Effect: Allow
-              Action:
-                - sqs:SendMessage
+              Action: sqs:SendMessage
               Resource: "*"
       Environment:
         Variables:
-          ConnectionStrings__ReaderConnection: ""
-          ConnectionStrings__WriterConnection: ""
-          GetExtendedDataUsersCache: "public.fn_get_extended_data_users_cache|Reader"
-          GetJwtTokenKey: "public.fn_get_jwt_token_key|Reader"
+          ConnectionStrings__ReaderConnection: "Server=qatch-db-us-qa-writer.iqor.qor.com;Port=5432;Database=qatch;User Id=qatchappreader;Password=mjY54g0ecNJcD6Km;ApplicationName=iQor.Qatch.Core.LiveQWebApi;timeout=60;"
+          ConnectionStrings__WriterConnection: "Server=qatch-db-us-qa-writer.iqor.qor.com;Port=5432;Database=qatch;User Id=qatchappadmin;Password=g0U6137{(Kl6;ApplicationName=iQor.Qatch.Core.LiveQWebApi;timeout=60;"
+          GetExtendedDataUsersCache: "dbo.fn_get_extended_data_users_cache|Reader"
+          GetJwtTokenKey: "dbo.fn_get_jwt_token_key|Reader"
           AWS__SQS__QueueUrl: ""
       Events:
         ApiRoot:
@@ -65,11 +166,32 @@ Resources:
             RestApiId: !Ref RestApiPrivate
             Path: /{proxy+}
             Method: ANY
+    Tags:
+      - Key: Name
+        Value: copy-azure-to-aws-rest-private
+      - Key: Description
+        Value: API Gateway
+      - Key: map-migrated
+        Value: !Ref MapMigrated
+      - Key: Client
+        Value: !Ref Client
+      - Key: Product
+        Value: !Ref Product
+      - Key: Environment
+        Value: !Ref EnvType
+      - Key: Owner
+        Value: !Ref Owner
+      - Key: Project
+        Value: !Ref Project
+      - Key: CreatedBy
+        Value: !Ref CreatedBy
+      - Key: UpdatedBy
+        Value: !Ref UpdatedBy
 
 Outputs:
   ApiId:
     Value: !Ref RestApiPrivate
     Description: API Gateway REST API Id (PRIVATE)
   ApiInvokeUrl:
-    Value: !Sub https://${RestApiPrivate}.execute-api.${AWS::Region}.amazonaws.com/prod
+    Value: !Sub https://${RestApiPrivate}.execute-api.${AWS::Region}.amazonaws.com/${EnvType}
     Description: Invoke URL (reachable only via the specified VPC endpoint)
