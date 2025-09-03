@@ -5,6 +5,7 @@ using CopyAzureToAWS.Api.Services;
 using CopyAzureToAWS.Data;
 using CopyAzureToAWS.Data.DTOs;
 using CopyAzureToAWS.Data.Models;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace CopyAzureToAWS.Api.Controllers;
 
@@ -20,6 +21,20 @@ public class CallDetailsController : ControllerBase
     {
         _context = context;
         _sqsService = sqsService;
+    }
+
+    [HttpGet("health")]
+    [AllowAnonymous]
+    public IActionResult Health()
+    {
+        try
+        {
+            return Ok(new { status = "ok", service = "calldetails", timeUtc = DateTime.UtcNow });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(503, new { status = "unhealthy", service = "calldetails", error = ex.Message, timeUtc = DateTime.UtcNow });
+        }
     }
 
     [HttpPost]

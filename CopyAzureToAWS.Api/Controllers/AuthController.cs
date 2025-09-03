@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using CopyAzureToAWS.Api.Services;
 using CopyAzureToAWS.Data.DTOs;
+using Microsoft.AspNetCore.Authorization;
 
 namespace CopyAzureToAWS.Api.Controllers;
 
@@ -9,27 +10,39 @@ namespace CopyAzureToAWS.Api.Controllers;
 public class AuthController : ControllerBase
 {
     private readonly ITokenService _tokenService;
-    private readonly IConfiguration _configuration;
+    private readonly IUserAccessService _userAccessService;
+    private readonly IJwtKeyProvider _jwtKeyProvider;
 
-    public AuthController(ITokenService tokenService, IConfiguration configuration)
+    public AuthController(ITokenService tokenService, IUserAccessService userAccessService, IJwtKeyProvider jwtKeyProvider)
     {
         _tokenService = tokenService;
-        _configuration = configuration;
+        _userAccessService = userAccessService;
+        _jwtKeyProvider = jwtKeyProvider;
+    }
+
+    [HttpGet("health")]
+    [AllowAnonymous]
+    public IActionResult Health()
+    {
+        try
+        {
+            return Ok(new { status = "ok", service = "auth", timeUtc = DateTime.UtcNow });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(503, new { status = "unhealthy", service = "auth", error = ex.Message, timeUtc = DateTime.UtcNow });
+        }
     }
 
     [HttpPost("login")]
-    public IActionResult Login([FromBody] LoginRequest request)
+    public async Task<IActionResult> Login([FromBody] LoginRequest request)
     {
-        // Simple authentication - in production, use proper user management
-        var validUsername = _configuration["Auth:Username"] ?? "admin";
-        var validPassword = _configuration["Auth:Password"] ?? "password";
-
-        if (request.Username != validUsername || request.Password != validPassword)
+        if (!await _userAccessService.ValidateCredentialsAsync(request.AccessKey, request.AccessSecret))
         {
             return Unauthorized(new { message = "Invalid credentials" });
         }
 
-        var token = _tokenService.GenerateToken(request.Username);
+        var token = _tokenService.GenerateToken(request.AccessKey);
         var expires = DateTime.UtcNow.AddHours(24);
 
         return Ok(new LoginResponse

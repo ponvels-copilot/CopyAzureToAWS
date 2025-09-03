@@ -2,8 +2,8 @@ namespace CopyAzureToAWS.Data.DTOs;
 
 public class LoginRequest
 {
-    public string Username { get; set; } = string.Empty;
-    public string Password { get; set; } = string.Empty;
+    public string AccessKey { get; set; } = string.Empty;
+    public string AccessSecret { get; set; } = string.Empty;
 }
 
 public class LoginResponse
@@ -39,4 +39,16 @@ public class SqsMessage
     public string AzureConnectionString { get; set; } = string.Empty;
     public string AzureBlobUrl { get; set; } = string.Empty;
     public string S3BucketName { get; set; } = string.Empty;
+}
+
+public class ExtendedDataUsers
+{
+    public string Indicator { get; set; } = string.Empty;
+    public string CountryCode { get; set; } = string.Empty;
+    public string ClientCode { get; set; } = string.Empty;
+    public string ExtendedDataType { get; set; } = string.Empty;
+    public string AccessKey { get; set; } = string.Empty;
+    public string AccessSecret { get; set; } = string.Empty;
+    public string ApplicationID { get; set; } = string.Empty;
+    public long ExtendedDataUsersMapID { get; set; }
 }

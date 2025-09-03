@@ -1,39 +1,36 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
-using System.Text;
 using Microsoft.IdentityModel.Tokens;
 
 namespace CopyAzureToAWS.Api.Services;
 
 public interface ITokenService
 {
-    string GenerateToken(string username);
+    string GenerateToken(string subject);
 }
 
 public class TokenService : ITokenService
 {
-    private readonly IConfiguration _configuration;
+    private readonly IJwtKeyProvider _keyProvider;
 
-    public TokenService(IConfiguration configuration)
+    public TokenService(IJwtKeyProvider keyProvider)
     {
-        _configuration = configuration;
+        _keyProvider = keyProvider;
     }
 
-    public string GenerateToken(string username)
+    public string GenerateToken(string subject)
     {
-        var jwtSettings = _configuration.GetSection("JwtSettings");
-        var secretKey = jwtSettings["SecretKey"] ?? "your-256-bit-secret-key-here-that-is-long-enough-for-hmac-sha256";
-        var key = Encoding.ASCII.GetBytes(secretKey);
+        var key = _keyProvider.GetSigningKey();
 
         var tokenDescriptor = new SecurityTokenDescriptor
         {
             Subject = new ClaimsIdentity(new[]
             {
-                new Claim(ClaimTypes.Name, username),
-                new Claim(ClaimTypes.NameIdentifier, username)
+                new Claim(ClaimTypes.Name, subject),
+                new Claim(ClaimTypes.NameIdentifier, subject)
             }),
             Expires = DateTime.UtcNow.AddHours(24),
-            SigningCredentials = new SigningCredentials(new SymmetricSecurityKey(key), SecurityAlgorithms.HmacSha256Signature)
+            SigningCredentials = new SigningCredentials(key, SecurityAlgorithms.HmacSha256Signature)
         };
 
         var tokenHandler = new JwtSecurityTokenHandler();
