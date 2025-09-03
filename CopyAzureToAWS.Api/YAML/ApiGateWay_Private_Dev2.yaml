@@ -76,7 +76,7 @@ Resources:
   RestApiAccessLogs:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub /aws/apigw/${RestApiPrivate}-${EnvType}
+      LogGroupName: !Sub /aws/apigateway/${RestApiPrivate}-${EnvType}
       RetentionInDays: 14
 
   RestApiPrivate:
@@ -97,7 +97,7 @@ Resources:
           MetricsEnabled: true
       AccessLogSetting:
         DestinationArn: !GetAtt RestApiAccessLogs.Arn
-        Format: '{ "requestId":"$context.requestId", "ip":"$context.identity.sourceIp", "caller":"$context.identity.caller", "user":"$context.identity.user", "requestTime":"$context.requestTime", "httpMethod":"$context.httpMethod", "resourcePath":"$context.resourcePath", "status":$context.status, "protocol":"$context.protocol", "responseLength":"$context.responseLength", "integrationStatus":"$context.integrationStatus", "integrationError":"$context.integrationErrorMessage", "xrayTraceId":"$context.xrayTraceId" }'
+        Format: '{ "requestId":"$context.requestId","ip":"$context.identity.sourceIp","caller":"$context.identity.caller","user":"$context.identity.user","requestTime":"$context.requestTime","httpMethod":"$context.httpMethod","resourcePath":"$context.resourcePath","status":$context.status,"protocol":"$context.protocol","responseLength":"$context.responseLength","integrationStatus":"$context.integrationStatus","integrationError":"$context.integrationErrorMessage","xrayTraceId":"$context.xrayTraceId" }'
       Auth:
         ResourcePolicy:
           CustomStatements:
@@ -109,6 +109,31 @@ Resources:
                 StringEquals:
                   aws:SourceVpce:
                     - vpce-0909347d01c0b50fc
+      DefinitionBody:
+        openapi: 3.0.1
+        info:
+          title: copy-azure-to-aws-rest-private
+          version: '1.0'
+        paths:
+          /:
+            x-amazon-apigateway-any-method:
+              x-amazon-apigateway-integration:
+                type: aws_proxy
+                httpMethod: POST
+                uri:
+                  Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${WebApiFunction.Arn}/invocations
+          /{proxy+}:
+            x-amazon-apigateway-any-method:
+              parameters:
+                - name: proxy
+                  in: path
+                  required: true
+                  schema: { type: string }
+              x-amazon-apigateway-integration:
+                type: aws_proxy
+                httpMethod: POST
+                uri:
+                  Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${WebApiFunction.Arn}/invocations
     Tags:
       - Key: Name
         Value: copy-azure-to-aws-rest-private
@@ -187,6 +212,14 @@ Resources:
         Value: !Ref CreatedBy
       - Key: UpdatedBy
         Value: !Ref UpdatedBy
+
+  ApiInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref WebApiFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${RestApiPrivate}/*/*/*
 
 Outputs:
   ApiId:

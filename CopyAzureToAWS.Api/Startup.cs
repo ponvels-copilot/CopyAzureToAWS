@@ -67,11 +67,12 @@ public class Startup
         app.UseSwagger();
         app.UseSwaggerUI();
 
-        app.UseHttpsRedirection();
+        // Must come before auth
+        app.UseRouting();
+
         app.UseAuthentication();
         app.UseAuthorization();
 
-        app.UseRouting();
         app.UseEndpoints(endpoints =>
         {
             endpoints.MapControllers();
