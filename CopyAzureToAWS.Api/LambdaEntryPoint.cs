@@ -6,7 +6,7 @@ namespace CopyAzureToAWS.Api
     {
         protected override void Init(IWebHostBuilder builder)
         {
-            builder.UseStartup<Program>();
+            builder.UseStartup<Startup>();
         }
     }
 }

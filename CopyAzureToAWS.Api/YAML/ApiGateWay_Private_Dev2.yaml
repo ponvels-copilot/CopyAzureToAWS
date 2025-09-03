@@ -1,0 +1,75 @@
+#stk-azure-to-aws-restapi-private
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: CopyAzureToAWS API - REST API Private
+
+Globals:
+  Function:
+    Runtime: dotnet8
+    MemorySize: 1024
+    Timeout: 30
+    Tracing: Active
+
+Resources:
+  RestApiPrivate:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: copy-azure-to-aws-rest-private
+      StageName: prod
+      EndpointConfiguration: PRIVATE
+      Auth:
+        ResourcePolicy:
+          CustomStatements:
+            - Effect: Allow
+              Principal: "*"
+              Action: execute-api:Invoke
+              Resource: execute-api:/*/*/*   # do not reference RestApiPrivate here
+              Condition:
+                StringEquals:
+                  aws:SourceVpce:
+                    - vpce-0909347d01c0b50fc    # replace/extend with your VPCe IDs
+
+  WebApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: copy-azure-to-aws-api-private
+      CodeUri:
+        Bucket: awsuse1dev2stiqor01
+        Key: lambdas/Azure_to_AWS/CopyAzureToAWS.Api.zip
+      Handler: CopyAzureToAWS.Api::CopyAzureToAWS.Api.LambdaEntryPoint::FunctionHandlerAsync
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - AWSLambdaVPCAccessExecutionRole
+        - Statement:
+            - Effect: Allow
+              Action:
+                - sqs:SendMessage
+              Resource: "*"
+      Environment:
+        Variables:
+          ConnectionStrings__ReaderConnection: ""
+          ConnectionStrings__WriterConnection: ""
+          GetExtendedDataUsersCache: "public.fn_get_extended_data_users_cache|Reader"
+          GetJwtTokenKey: "public.fn_get_jwt_token_key|Reader"
+          AWS__SQS__QueueUrl: ""
+      Events:
+        ApiRoot:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApiPrivate
+            Path: /
+            Method: ANY
+        ApiProxy:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApiPrivate
+            Path: /{proxy+}
+            Method: ANY
+
+Outputs:
+  ApiId:
+    Value: !Ref RestApiPrivate
+    Description: API Gateway REST API Id (PRIVATE)
+  ApiInvokeUrl:
+    Value: !Sub https://${RestApiPrivate}.execute-api.${AWS::Region}.amazonaws.com/prod
+    Description: Invoke URL (reachable only via the specified VPC endpoint)

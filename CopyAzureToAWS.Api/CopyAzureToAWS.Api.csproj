@@ -25,4 +25,8 @@
     <ProjectReference Include="..\CopyAzureToAWS.Data\CopyAzureToAWS.Data.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Folder Include="YAML\" />
+  </ItemGroup>
+
 </Project>

@@ -14,7 +14,7 @@ namespace CopyAzureToAWS.Api
             Host.CreateDefaultBuilder(args)
                 .ConfigureWebHostDefaults(webBuilder =>
                 {
-                    webBuilder.UseStartup<Program>();
+                    webBuilder.UseStartup<Startup>();
                 });
     }
 }

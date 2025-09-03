@@ -1,0 +1,53 @@
+#stk-azure-to-aws-restapi
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: CopyAzureToAWS API
+
+Globals:
+  Function:
+    Runtime: dotnet8
+    MemorySize: 1024
+    Timeout: 30
+    Tracing: Active
+
+Resources:
+  ApiGateway:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: prod
+
+  WebApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: copy-azure-to-aws-api
+      CodeUri:
+        Bucket: awsuse1dev2stiqor01
+        Key: lambdas/Azure_to_AWS/CopyAzureToAWS.Api.zip
+      Handler: CopyAzureToAWS.Api::CopyAzureToAWS.Api.LambdaEntryPoint::FunctionHandlerAsync
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - AWSLambdaVPCAccessExecutionRole
+        - Statement:
+            - Effect: Allow
+              Action: sqs:SendMessage
+              Resource: "*"
+      Environment:
+        Variables:
+          ConnectionStrings__ReaderConnection: ""
+          ConnectionStrings__WriterConnection: ""
+          GetExtendedDataUsersCache: "public.fn_get_extended_data_users_cache|Reader"
+          GetJwtTokenKey: "public.fn_get_jwt_token_key|Reader"
+          AWS__SQS__QueueUrl: ""
+      Events:
+        ApiProxy:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref ApiGateway
+            Path: /{proxy+}
+            Method: ANY
+        ApiRoot:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref ApiGateway
+            Path: /
+            Method: ANY
