@@ -4,6 +4,18 @@ Transform: AWS::Serverless-2016-10-31
 Description: CopyAzureToAWS API - REST API Private
 
 Parameters:
+  VPCIDq:
+    Type: "AWS::EC2::VPC::Id"
+    Default: "vpc-08834460b465731a3"
+  PrivateSubnet1:
+    Type: "AWS::EC2::Subnet::Id"
+    Default: "subnet-0a32e71fe797499b6"
+  PrivateSubnet2:
+    Type: "AWS::EC2::Subnet::Id"
+    Default: "subnet-0896e97930e347628"
+  PrivateSecurityGroupID:
+    Type: 'AWS::EC2::SecurityGroup::Id'
+    Default: "sg-04fe11d44a2a879b2"
   EnvType:
     Description: Environment type.
     Type: String
@@ -171,6 +183,12 @@ Resources:
             - Effect: Allow
               Action: sqs:SendMessage
               Resource: "*"
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref PrivateSecurityGroupID
+        SubnetIds:
+          - !Ref PrivateSubnet1
+          - !Ref PrivateSubnet2
       Environment:
         Variables:
           ConnectionStrings__ReaderConnection: "Server=qatch-db-us-qa-writer.iqor.qor.com;Port=5432;Database=qatch;User Id=qatchappreader;Password=mjY54g0ecNJcD6Km;ApplicationName=iQor.Qatch.Core.LiveQWebApi;timeout=60;"
