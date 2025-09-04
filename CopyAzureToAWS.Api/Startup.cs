@@ -1,9 +1,9 @@
 using System.Text;
+using CopyAzureToAWS.Api.Configuration;
 using CopyAzureToAWS.Api.Services;
 using CopyAzureToAWS.Data;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
 
 namespace CopyAzureToAWS.Api;
@@ -11,51 +11,51 @@ namespace CopyAzureToAWS.Api;
 public class Startup
 {
     public IConfiguration Configuration { get; }
-
-    public Startup(IConfiguration configuration)
-    {
-        Configuration = configuration;
-    }
+    public Startup(IConfiguration configuration) => Configuration = configuration;
 
     public void ConfigureServices(IServiceCollection services)
     {
         services.AddControllers();
         services.AddEndpointsApiExplorer();
         services.AddSwaggerGen();
+
+        // IMPORTANT: single registration of resolver
+        services.AddSingleton<IConnectionStringResolver, ConnectionStringResolver>();
+
+        // Default context (US writer) – optional; your controller builds country-specific contexts manually
+        services.AddDbContext<ApplicationDbContext>((sp, opts) =>
+        {
+            var resolver = sp.GetRequiredService<IConnectionStringResolver>();
+            opts.UseNpgsql(resolver.GetWriter("US"));
+        });
+
         services.AddMemoryCache();
         services.AddAuthorization();
 
-        // EF Core (PostgreSQL) - default to writer connection
-        services.AddDbContext<ApplicationDbContext>(options =>
-            options.UseNpgsql(Configuration.GetConnectionString("WriterConnection")));
-
-        // DI registrations
         services.AddSingleton<IJwtKeyProvider, PgJwtKeyProvider>();
         services.AddScoped<ITokenService, TokenService>();
         services.AddScoped<ISqsService, SqsService>();
         services.AddScoped<IUserAccessService, PgUserAccessService>();
 
-        // JWT auth configured to resolve key via IJwtKeyProvider
-        services.AddAuthentication(options =>
+        services.AddAuthentication(o =>
         {
-            options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
-            options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+            o.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+            o.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
         })
-        .AddJwtBearer(options =>
+        .AddJwtBearer(o =>
         {
-            options.RequireHttpsMetadata = false;
-            options.SaveToken = true;
-
-            // Resolve signing key at validation time to avoid building a temporary provider
-            options.TokenValidationParameters = new TokenValidationParameters
+            o.RequireHttpsMetadata = false;
+            o.SaveToken = true;
+            o.TokenValidationParameters = new()
             {
                 ValidateIssuerSigningKey = true,
                 ValidateIssuer = false,
                 ValidateAudience = false,
                 ClockSkew = TimeSpan.Zero,
-                IssuerSigningKeyResolver = (token, securityToken, kid, validationParameters) =>
+                IssuerSigningKeyResolver = (token, securityToken, kid, p) =>
                 {
-                    var keyProvider = services.BuildServiceProvider().GetRequiredService<IJwtKeyProvider>();
+                    var sp = services.BuildServiceProvider();
+                    var keyProvider = sp.GetRequiredService<IJwtKeyProvider>();
                     return new[] { keyProvider.GetSigningKey() };
                 }
             };
@@ -66,16 +66,9 @@ public class Startup
     {
         app.UseSwagger();
         app.UseSwaggerUI();
-
-        // Must come before auth
         app.UseRouting();
-
         app.UseAuthentication();
         app.UseAuthorization();
-
-        app.UseEndpoints(endpoints =>
-        {
-            endpoints.MapControllers();
-        });
+        app.UseEndpoints(e => e.MapControllers());
     }
 }

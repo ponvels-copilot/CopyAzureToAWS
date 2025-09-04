@@ -20,10 +20,10 @@ Metadata:
       - Label:
           default: "Configuration for Secret Manager Resource Creation"
         Parameters:
-          - PostgresConnectionReaderString
-          - PostgresConnectionWriterString
-          # - QatchApiAccessKey
-          # - QatchApiAccessSecret
+          - PostgresConnectionUSReaderString
+          - PostgresConnectionUSWriterString
+          - PostgresConnectionUSReaderString
+          - PostgresConnectionUSWriterString
       - Label:
           default: "General Configuration"
         Parameters:
@@ -65,10 +65,14 @@ Metadata:
         default: "Who is the owner of the project?"
       CreatedBy:
         default: "who creates this resource?"
-      PostgresConnectionReaderString:
-        default: "Postgresql reader connection string(readonly) to use in the lambda to retrieve the data from Qatch database"
-      PostgresConnectionWriterString:
-        default: "Postgresql writer connection string(readonly) to use in the lambda to retrieve the data from Qatch database"
+      PostgresConnectionUSReaderString:
+        default: "Postgresql reader connection string(readonly) to use in the lambda to retrieve the data from Qatch US database"
+      PostgresConnectionUSWriterString:
+        default: "Postgresql writer connection string(readonly) to use in the lambda to retrieve the data from Qatch US database"
+      PostgresConnectionCAReaderString:
+        default: "Postgresql reader connection string(readonly) to use in the lambda to retrieve the data from Qatch CA database"
+      PostgresConnectionCAWriterString:
+        default: "Postgresql writer connection string(readonly) to use in the lambda to retrieve the data from Qatch CA database"
       SecretName:
         default: "Name of the secret to be created in AWS Secrets Manager"
       # KmsKeyAlias:
@@ -155,14 +159,24 @@ Parameters:
     Type: String
     AllowedValues: [azure_to_aws]
     Default: azure_to_aws
-  PostgresConnectionReaderString:
+  PostgresConnectionUSReaderString:
     Type: String
-    Default: Server=qatch-db-us-qa-writer.iqor.qor.com;Port=5432;Database=qatch;User Id=qatchappreader;Password=mjY54g0ecNJcD6Km;ApplicationName=iQor.Qatch.Core.LiveQWebApi;timeout=60;
+    Default: Server=qatch-db-us-qa-writer.iqor.qor.com;Port=5432;Database=qatch;User Id=qatchappreader;Password=mjY54g0ecNJcD6Km;ApplicationName=Azure_to_AWS_WebApi;timeout=60;
     NoEcho: true                # ensures password is hidden in console/CLI
     Description: Secure password input for connectionstring
-  PostgresConnectionWriterString:
+  PostgresConnectionUSWriterString:
     Type: String
-    Default: Server=qatch-db-us-qa-writer.iqor.qor.com;Port=5432;Database=qatch;User Id=qatchappadmin;Password=g0U6137{(Kl6;ApplicationName=iQor.Qatch.Core.LiveQWebApi;timeout=60;
+    Default: Server=qatch-db-us-qa-writer.iqor.qor.com;Port=5432;Database=qatch;User Id=qatchappadmin;Password=g0U6137{(Kl6;ApplicationName=Azure_to_AWS_WebApi;timeout=60;
+    NoEcho: true                # ensures password is hidden in console/CLI
+    Description: Secure password input for connectionstring
+  PostgresConnectionCAReaderString:
+    Type: String
+    Default: Server=qatch-db-ca-qa-reader.iqor.qor.com;Port=5432;Database=qatch_qa;User Id=qatchappreader;Password=9V1yQ'2n/8^P;ApplicationName=Azure_to_AWS_WebApi;timeout=60;
+    NoEcho: true                # ensures password is hidden in console/CLI
+    Description: Secure password input for connectionstring
+  PostgresConnectionCAWriterString:
+    Type: String
+    Default: Server=qatch-db-ca-qa-writer.iqor.qor.com;Port=5432;Database=qatch_qa;User Id=qatchappadmin;Password=j=9r}1[CA102;ApplicationName=Azure_to_AWS_WebApi;timeout=60;
     NoEcho: true                # ensures password is hidden in console/CLI
     Description: Secure password input for connectionstring
   Description:
@@ -190,8 +204,10 @@ Resources:
       Description: !Sub "Azure to AWS Rest Api for ${Environment} environment"
       SecretString: !Sub |
         {
-          "ConnectionStrings_ReaderConnection": "${PostgresConnectionReaderString}",
-          "ConnectionStrings_WriterConnection": "${PostgresConnectionWriterString}"
+          "ConnectionStrings_USReaderConnection": "${PostgresConnectionUSReaderString}",
+          "ConnectionStrings_USWriterConnection": "${PostgresConnectionUSWriterString}",
+          "ConnectionStrings_CAReaderConnection": "${PostgresConnectionCAReaderString}",
+          "ConnectionStrings_CAWriterConnection": "${PostgresConnectionCAWriterString}"
         }
       Tags:
         - Key: Name
@@ -324,7 +340,8 @@ Resources:
         Variables:
           SECRET_ID: !Sub copy-azure-to-aws/${Environment}/${SecretName}
           GetExtendedDataUsersCache: "dbo.fn_get_extended_data_users_cache|Reader"
-          GetJwtTokenKey: "dbo.fn_get_jwt_token_key|Reader"
+          GetJwtTokenKey: "dbo.fn_get_jwt_token_key|Reader",
+          RecordAzureToAWSStatus: "dbo.sp_record_azure_to_aws_status|Writer"
           AWS__SQS__QueueUrl: ""
       Events:
         ApiRoot:

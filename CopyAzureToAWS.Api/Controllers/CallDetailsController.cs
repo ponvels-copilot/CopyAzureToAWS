@@ -1,11 +1,14 @@
-using Microsoft.AspNetCore.Authorization;
-using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
+﻿using CopyAzureToAWS.Api.Configuration;
 using CopyAzureToAWS.Api.Services;
 using CopyAzureToAWS.Data;
 using CopyAzureToAWS.Data.DTOs;
-using CopyAzureToAWS.Data.Models;
-using Microsoft.Extensions.DependencyInjection;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+using Newtonsoft.Json;
+using Npgsql;
+using NpgsqlTypes;
+using System.Net;
 
 namespace CopyAzureToAWS.Api.Controllers;
 
@@ -14,162 +17,161 @@ namespace CopyAzureToAWS.Api.Controllers;
 [Authorize]
 public class CallDetailsController : ControllerBase
 {
-    private readonly ApplicationDbContext _context;
-    private readonly ISqsService _sqsService;
+    private new enum StatusCode { INPROGRESS, SUCCESS, ERROR }
 
-    public CallDetailsController(ApplicationDbContext context, ISqsService sqsService)
+    private readonly ISqsService _sqsService;
+    private readonly IUserAccessService _userAccessService;
+    private readonly IConnectionStringResolver _connResolver;
+
+    // Removed resolver from DI, build it from IConfiguration
+    public CallDetailsController(
+        ISqsService sqsService,
+        IUserAccessService userAccessService,
+        IConfiguration configuration)
     {
-        _context = context;
         _sqsService = sqsService;
+        _userAccessService = userAccessService;
+        _connResolver = new ConnectionStringResolver(configuration);
     }
 
     [HttpGet("health")]
     [AllowAnonymous]
-    public IActionResult Health()
+    public IActionResult Health() =>
+        Ok(new { status = "ok", service = "calldetails", timeUtc = DateTime.UtcNow });
+
+    /// <summary>
+    /// Creates a call detail entry. Uses the Writer connection for the specified country (default US).
+    /// </summary>
+    [HttpPost("CreateCallDetail")]
+    public async Task<IActionResult> CreateCallDetail([FromBody] AzureToAWSRequest request)
     {
+        var requestId = Guid.NewGuid().ToString();
+        var country = string.IsNullOrWhiteSpace(request.CountryCode) ? "US" : request.CountryCode.Trim().ToUpperInvariant();
+
         try
         {
-            return Ok(new { status = "ok", service = "calldetails", timeUtc = DateTime.UtcNow });
+            await using var db = CreateDbContext(country, writer: false);
+
+            // Existence check (Writer; could use reader if you prefer)
+            var exists = await db.TableAzureToAWSRequest
+                .AnyAsync(cd => cd.CallDetailID == request.CallDetailID);
+
+            if (exists)
+            {
+                return Conflict(new ApiResponse
+                {
+                    IsSuccess = false,
+                    StatusCode = (int)HttpStatusCode.BadRequest,
+                    Message = $"Calldetailid: {request.CallDetailID} already in processing state",
+                    RequestId = requestId
+                });
+            }
+
+            var row = new TableAzureToAWSRequest
+            {
+                CallDetailID = request.CallDetailID,
+                AudioFile = request.AudioFile,
+                Status = StatusCode.INPROGRESS.ToString(),
+                CreatedBy = "API",
+                CreatedDate = DateTime.UtcNow
+            };
+
+            // Stored proc write (connection resolved by user access service – must also be country aware)
+            var recorded = await RecordAzureToAWSStatus(row, country);
+            if (!recorded)
+            {
+                return StatusCode((int)HttpStatusCode.InternalServerError,
+                    new ApiResponse
+                    {
+                        IsSuccess = false,
+                        StatusCode = (int)HttpStatusCode.InternalServerError,
+                        Message = $"Failed to record status for CallDetailID {request.CallDetailID}",
+                        RequestId = requestId
+                    });
+            }
+
+            return Ok(new ApiResponse
+            {
+                IsSuccess = true,
+                StatusCode = (int)HttpStatusCode.OK,
+                Message = $"Calldetailid: {request.CallDetailID} queued (Country={country}, Role=Writer).",
+                RequestId = requestId
+            });
         }
         catch (Exception ex)
         {
-            return StatusCode(503, new { status = "unhealthy", service = "calldetails", error = ex.Message, timeUtc = DateTime.UtcNow });
+            return StatusCode(500, new
+            {
+                message = "Internal server error",
+                error = ex.Message,
+                requestId
+            });
         }
     }
 
-    [HttpPost]
-    public async Task<IActionResult> CreateCallDetail([FromBody] CallDetailRequest request)
+    /// <summary>
+    /// Build a context for a specific country & role using dynamic connection strings:
+    /// Keys expected: USWriterConnection, USReaderConnection, CAWriterConnection, CAReaderConnection, etc.
+    /// </summary>
+    private ApplicationDbContext CreateDbContext(string countryCode, bool writer)
+    {
+        var cs = writer
+            ? _connResolver.GetWriter(countryCode)
+            : _connResolver.GetReader(countryCode);
+
+        var opts = new DbContextOptionsBuilder<ApplicationDbContext>()
+            .UseNpgsql(cs)
+            .EnableSensitiveDataLogging(false)
+            .Options;
+
+        return new ApplicationDbContext(opts);
+    }
+
+    private async Task<bool> RecordAzureToAWSStatus(TableAzureToAWSRequest row, string countryCode)
     {
         try
         {
-            // Check if call detail already exists
-            var existingCallDetail = await _context.CallDetails
-                .FirstOrDefaultAsync(cd => cd.CallDetailId == request.CallDetailId);
+            (string procName, string connString) = _userAccessService.GetRecordAzureToAWSStatusConnectionString(countryCode);
 
-            if (existingCallDetail != null)
-            {
-                return Conflict(new { message = "Call detail already exists" });
-            }
+            await using var conn = new NpgsqlConnection(connString);
+            await conn.OpenAsync();
 
-            // Create new call detail record
-            var callDetail = new CallDetail
+            await using var cmd = new NpgsqlCommand
             {
-                CallDetailId = request.CallDetailId,
-                AudioFileName = request.AudioFileName,
-                AzureConnectionString = request.AzureConnectionString,
-                AzureBlobUrl = request.AzureBlobUrl,
-                S3BucketName = request.S3BucketName,
-                Status = "Pending"
+                Connection = conn,
+                CommandText = $"CALL {procName}(:p_json);",
+                CommandType = System.Data.CommandType.Text,
+                CommandTimeout = 300
             };
+            cmd.Parameters.AddWithValue("p_json", NpgsqlDbType.Jsonb, JsonConvert.SerializeObject(row));
+            await cmd.ExecuteNonQueryAsync();
 
-            _context.CallDetails.Add(callDetail);
-            await _context.SaveChangesAsync();
-
-            // Send message to SQS
-            var sqsMessage = new SqsMessage
-            {
-                CallDetailId = request.CallDetailId,
-                AudioFileName = request.AudioFileName,
-                AzureConnectionString = request.AzureConnectionString,
-                AzureBlobUrl = request.AzureBlobUrl,
-                S3BucketName = request.S3BucketName
-            };
-
-            var messageSent = await _sqsService.SendMessageAsync(sqsMessage);
-            
-            if (!messageSent)
-            {
-                // Update status to failed if SQS message couldn't be sent
-                callDetail.Status = "Failed";
-                callDetail.ErrorMessage = "Failed to send message to SQS";
-                callDetail.UpdatedAt = DateTime.UtcNow;
-                await _context.SaveChangesAsync();
-            }
-
-            var response = new CallDetailResponse
-            {
-                Id = callDetail.Id,
-                CallDetailId = callDetail.CallDetailId,
-                AudioFileName = callDetail.AudioFileName,
-                Status = callDetail.Status,
-                CreatedAt = callDetail.CreatedAt,
-                UpdatedAt = callDetail.UpdatedAt,
-                ErrorMessage = callDetail.ErrorMessage
-            };
-
-            return Ok(response);
+            return true;
         }
         catch (Exception ex)
         {
-            return StatusCode(500, new { message = "Internal server error", error = ex.Message });
+            //Console.WriteLine(JsonConvert.SerializeObject(new
+            //{
+            //    row.RequestId,
+            //    row.AudioFile,
+            //    Country = countryCode,
+            //    Error = ex.Message,
+            //    Op = "RecordAzureToAWSStatus"
+            //}));
+            return false;
         }
     }
 
-    [HttpGet("{callDetailId}")]
-    public async Task<IActionResult> GetCallDetail(string callDetailId)
+    [HttpGet("db-resolve")]
+    public IActionResult Resolve([FromQuery] string country = "US")
     {
-        try
+        return Ok(new
         {
-            var callDetail = await _context.CallDetails
-                .FirstOrDefaultAsync(cd => cd.CallDetailId == callDetailId);
+            country = country.ToUpperInvariant(),
+            writer = Trunc(_connResolver.GetWriter(country)),
+            reader = Trunc(_connResolver.GetReader(country))
+        });
 
-            if (callDetail == null)
-            {
-                return NotFound(new { message = "Call detail not found" });
-            }
-
-            var response = new CallDetailResponse
-            {
-                Id = callDetail.Id,
-                CallDetailId = callDetail.CallDetailId,
-                AudioFileName = callDetail.AudioFileName,
-                Status = callDetail.Status,
-                CreatedAt = callDetail.CreatedAt,
-                UpdatedAt = callDetail.UpdatedAt,
-                ErrorMessage = callDetail.ErrorMessage
-            };
-
-            return Ok(response);
-        }
-        catch (Exception ex)
-        {
-            return StatusCode(500, new { message = "Internal server error", error = ex.Message });
-        }
-    }
-
-    [HttpGet]
-    public async Task<IActionResult> GetCallDetails([FromQuery] string? status = null)
-    {
-        try
-        {
-            var query = _context.CallDetails.AsQueryable();
-
-            if (!string.IsNullOrEmpty(status))
-            {
-                query = query.Where(cd => cd.Status == status);
-            }
-
-            var callDetails = await query
-                .OrderByDescending(cd => cd.CreatedAt)
-                .Take(100)
-                .ToListAsync();
-
-            var responses = callDetails.Select(cd => new CallDetailResponse
-            {
-                Id = cd.Id,
-                CallDetailId = cd.CallDetailId,
-                AudioFileName = cd.AudioFileName,
-                Status = cd.Status,
-                CreatedAt = cd.CreatedAt,
-                UpdatedAt = cd.UpdatedAt,
-                ErrorMessage = cd.ErrorMessage
-            }).ToList();
-
-            return Ok(responses);
-        }
-        catch (Exception ex)
-        {
-            return StatusCode(500, new { message = "Internal server error", error = ex.Message });
-        }
+        static string Trunc(string s) => s.Length <= 90 ? s : s[..90] + "...";
     }
 }

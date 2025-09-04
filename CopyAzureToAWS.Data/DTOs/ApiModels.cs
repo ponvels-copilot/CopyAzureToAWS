@@ -1,3 +1,5 @@
+using System.ComponentModel.DataAnnotations;
+
 namespace CopyAzureToAWS.Data.DTOs;
 
 public class LoginRequest
@@ -12,9 +14,29 @@ public class LoginResponse
     public DateTime Expires { get; set; }
 }
 
+public class ApiResponse
+{
+    public bool IsSuccess { get; set; } = false;
+    public int StatusCode { get; set; }
+    public string Message { get; set; } = string.Empty;
+    public string RequestId { get; set; } = string.Empty;
+}
+
+public class AzureToAWSRequest
+{
+    [Required, StringLength(2, MinimumLength = 2, ErrorMessage = "CountryCode must be a 2-letter code")]
+    public string? CountryCode { get; set; }
+
+    [Required]
+    public long CallDetailID { get; set; }
+
+    [Required]
+    public string AudioFile { get; set; } = string.Empty;
+}
+
 public class CallDetailRequest
 {
-    public string CallDetailId { get; set; } = string.Empty;
+    public long CallDetailID { get; set; }
     public string AudioFileName { get; set; } = string.Empty;
     public string AzureConnectionString { get; set; } = string.Empty;
     public string AzureBlobUrl { get; set; } = string.Empty;
@@ -24,7 +46,7 @@ public class CallDetailRequest
 public class CallDetailResponse
 {
     public int Id { get; set; }
-    public string CallDetailId { get; set; } = string.Empty;
+    public long CallDetailID { get; set; }
     public string AudioFileName { get; set; } = string.Empty;
     public string Status { get; set; } = string.Empty;
     public DateTime CreatedAt { get; set; }
@@ -34,7 +56,7 @@ public class CallDetailResponse
 
 public class SqsMessage
 {
-    public string CallDetailId { get; set; } = string.Empty;
+    public long CallDetailID { get; set; }
     public string AudioFileName { get; set; } = string.Empty;
     public string AzureConnectionString { get; set; } = string.Empty;
     public string AzureBlobUrl { get; set; } = string.Empty;
@@ -51,4 +73,13 @@ public class ExtendedDataUsers
     public string AccessSecret { get; set; } = string.Empty;
     public string ApplicationID { get; set; } = string.Empty;
     public long ExtendedDataUsersMapID { get; set; }
+}
+
+public class Logging
+{
+    public string RequestId { get; set; } = string.Empty;
+    public string Key { get; set; } = string.Empty;
+    public string Message { get; set; } = string.Empty;
+    public bool IsSuccess { get; set; } = true;
+    public Exception? Exception { get; set; }
 }

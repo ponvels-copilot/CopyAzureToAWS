@@ -1,13 +1,17 @@
-using Microsoft.Extensions.Caching.Memory;
-using Npgsql;
-using CopyAzureToAWS.Data.DTOs;
 using CopyAzureToAWS.Api.Infrastructure;
+using CopyAzureToAWS.Data.DTOs;
+using Microsoft.Extensions.Caching.Memory;
+using Newtonsoft.Json;
+using Npgsql;
+using NpgsqlTypes;
+using System.Data;
 
 namespace CopyAzureToAWS.Api.Services;
 
 public interface IUserAccessService
 {
     Task<bool> ValidateCredentialsAsync(string accessKey, string accessSecret);
+    (string, string) GetRecordAzureToAWSStatusConnectionString(string countryCode);
 }
 
 public class PgUserAccessService : IUserAccessService
@@ -33,6 +37,20 @@ public class PgUserAccessService : IUserAccessService
             string.Equals(u.AccessSecret, accessSecret, StringComparison.Ordinal));
     }
 
+    public (string, string) GetRecordAzureToAWSStatusConnectionString(string countryCode)
+    {
+        // The method does not contain any await, so it should not be marked async.
+        // Remove 'async' and return synchronously.
+        var (fnName, role) = DbConfigHelper.ParseFnAndRole(
+                _configuration["RecordAzureToAWSStatus"],
+                "dbo.usp_record_azure_to_aws_status",
+                "Writer");
+
+        var cs = DbConfigHelper.ResolveConnectionString(_configuration, role, countryCode);
+
+        return (fnName, cs);
+    }
+
     private async Task<IReadOnlyList<ExtendedDataUsers>> LoadOrGetCacheAsync()
     {
         var users = await _cache.GetOrCreateAsync<IReadOnlyList<ExtendedDataUsers>>(CacheKey, async entry =>
@@ -41,7 +59,7 @@ public class PgUserAccessService : IUserAccessService
 
             var (fnName, role) = DbConfigHelper.ParseFnAndRole(
                 _configuration["GetExtendedDataUsersCache"],
-                "public.fn_get_extended_data_users_cache",
+                "dbo.fn_get_extended_data_users_cache",
                 "Reader");
 
             var cs = DbConfigHelper.ResolveConnectionString(_configuration, role);

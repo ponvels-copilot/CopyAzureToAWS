@@ -7,7 +7,9 @@ namespace CopyAzureToAWS.Api.Secrets
     // }
     public class SecretData
     {
-        public string? ConnectionStrings_ReaderConnection { get; set; }
-        public string? ConnectionStrings_WriterConnection { get; set; }
+        public string? ConnectionStrings_USReaderConnection { get; set; }
+        public string? ConnectionStrings_USWriterConnection { get; set; }
+        public string? ConnectionStrings_CAReaderConnection { get; set; }
+        public string? ConnectionStrings_CAWriterConnection { get; set; }
     }
 }

@@ -22,9 +22,9 @@ public static class DbConfigHelper
         return (fn, role);
     }
 
-    public static string ResolveConnectionString(IConfiguration configuration, string role)
+    public static string ResolveConnectionString(IConfiguration configuration, string role, string countrycode = "US")
     {
-        var name = role.Equals("Writer", StringComparison.OrdinalIgnoreCase) ? "WriterConnection" : "ReaderConnection";
+        var name = role.Equals("Writer", StringComparison.OrdinalIgnoreCase) ? string.Concat(countrycode, "WriterConnection") : string.Concat(countrycode, "ReaderConnection");
         var cs = configuration.GetConnectionString(name);
         if (string.IsNullOrWhiteSpace(cs))
             throw new InvalidOperationException($"Missing ConnectionStrings:{name}");

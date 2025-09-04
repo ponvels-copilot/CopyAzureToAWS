@@ -67,16 +67,26 @@ namespace CopyAzureToAWS.Api
 
                 if (data is not null)
                 {
-                    if (!string.IsNullOrWhiteSpace(data.ConnectionStrings_WriterConnection))
-                        dict["ConnectionStrings:WriterConnection"] = data.ConnectionStrings_WriterConnection;
+                    if (!string.IsNullOrWhiteSpace(data.ConnectionStrings_USWriterConnection))
+                        dict["ConnectionStrings:USWriterConnection"] = data.ConnectionStrings_USWriterConnection;
 
-                    if (!string.IsNullOrWhiteSpace(data.ConnectionStrings_ReaderConnection))
-                        dict["ConnectionStrings:ReaderConnection"] = data.ConnectionStrings_ReaderConnection;
+                    if (!string.IsNullOrWhiteSpace(data.ConnectionStrings_USReaderConnection))
+                        dict["ConnectionStrings:USReaderConnection"] = data.ConnectionStrings_USReaderConnection;
 
-                    if (!dict.ContainsKey("ConnectionStrings:WriterConnection"))
-                        System.Console.WriteLine("[Secrets] Writer connection missing in secret.");
-                    if (!dict.ContainsKey("ConnectionStrings:ReaderConnection"))
-                        System.Console.WriteLine("[Secrets] Reader connection missing in secret.");
+                    if (!string.IsNullOrWhiteSpace(data.ConnectionStrings_CAWriterConnection))
+                        dict["ConnectionStrings:CAWriterConnection"] = data.ConnectionStrings_CAWriterConnection;
+
+                    if (!string.IsNullOrWhiteSpace(data.ConnectionStrings_CAReaderConnection))
+                        dict["ConnectionStrings:CAReaderConnection"] = data.ConnectionStrings_CAReaderConnection;
+
+                    if (!dict.ContainsKey("ConnectionStrings:USWriterConnection"))
+                        System.Console.WriteLine("[Secrets] US Writer connection missing in secret.");
+                    if (!dict.ContainsKey("ConnectionStrings:USReaderConnection"))
+                        System.Console.WriteLine("[Secrets] US Reader connection missing in secret.");
+                    if (!dict.ContainsKey("ConnectionStrings:CAWriterConnection"))
+                        System.Console.WriteLine("[Secrets] CA Writer connection missing in secret.");
+                    if (!dict.ContainsKey("ConnectionStrings:CAReaderConnection"))
+                        System.Console.WriteLine("[Secrets] CA Reader connection missing in secret.");
                 }
             }
             catch (ResourceNotFoundException)

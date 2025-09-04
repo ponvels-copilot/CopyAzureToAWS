@@ -1,31 +1,26 @@
-﻿using System.ComponentModel.DataAnnotations;
+﻿using System.ComponentModel.DataAnnotations.Schema;
 
-namespace CopyAzureToAWS.Data.Models;
-
-public class CallDetail
+[Table("azure_to_aws_request", Schema = "dbo")]
+public class TableAzureToAWSRequest
 {
-    [Key]
-    public int Id { get; set; }
-    
-    public string CallDetailId { get; set; } = string.Empty;
-    
-    public string AudioFileName { get; set; } = string.Empty;
-    
-    public string Status { get; set; } = "Pending"; // Pending, Processing, Completed, Failed
-    
-    public string? AzureConnectionString { get; set; }
-    
-    public string? AzureBlobUrl { get; set; }
-    
-    public string? S3BucketName { get; set; }
-    
-    public string? S3Key { get; set; }
-    
-    public string? Md5Checksum { get; set; }
-    
-    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
-    
-    public DateTime? UpdatedAt { get; set; }
-    
-    public string? ErrorMessage { get; set; }
+    [Column("calldetailid")]
+    public long CallDetailID { get; set; }
+
+    [Column("audiofile")]
+    public string AudioFile { get; set; } = string.Empty;
+
+    [Column("status")]
+    public string Status { get; set; } = string.Empty;
+
+    //[Column("requestid")]
+    //public string RequestId { get; set; } = string.Empty;
+
+    //[Column("countrycode")]
+    //public string CountryCode { get; set; } = string.Empty;
+
+    [Column("createdby")]
+    public string CreatedBy { get; set; } = string.Empty;
+
+    [Column("createddate")]
+    public DateTime CreatedDate { get; set; }
 }
