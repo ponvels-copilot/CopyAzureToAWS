@@ -3,20 +3,124 @@ AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 Description: CopyAzureToAWS API - REST API Private
 
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: "General Tag Settings"
+        Parameters:
+          - Environment
+          - Client
+          - Project
+          - SubProject
+          - Description
+          - Owner
+          - CreatedBy
+          - UpdatedBy
+      - Label:
+          default: "Configuration for Secret Manager Resource Creation"
+        Parameters:
+          - PostgresConnectionReaderString
+          - PostgresConnectionWriterString
+          # - QatchApiAccessKey
+          # - QatchApiAccessSecret
+      - Label:
+          default: "General Configuration"
+        Parameters:
+          - SecretName
+      - Label:
+          default: "VPC, Subnets, SecurityGroups Configuration for Azure to AWS Lambda(s) "
+        Parameters:
+          - VpcId
+          - SubnetIds
+          - SecurityGroupIds
+          - VpcEndpointIds
+      # - Label:
+      #     default: "Azure to AWS S3 Trigger Lambda Code Settings"
+      #   Parameters:
+      #     - LambdaS3TriggerKey
+      #     - ExistingRoleArn
+      #     - TriggerBucket
+      # - Label:
+      #     default: "Azure to AWS SQS Trigger Lambda Code Settings"
+      #   Parameters:
+      #     - S3Key
+      #     - SQSLambdaExistingRoleArn
+      #     - QatchTokenEndpoint
+      #     - QatchEndpoint
+      #     - QatchS3Bucket
+
+    ParameterLabels:
+      Environment:
+        default: "Tag for Deployment Environment (dev,alpha, prod)"
+      Client:
+        default: "Tag for Client "
+      Project:
+        default: "Primary Project Tag"
+      SubProject:
+        default: "Sub Project Tag"
+      Description:
+        default: "Brief description about the project"
+      Owner:
+        default: "Who is the owner of the project?"
+      CreatedBy:
+        default: "who creates this resource?"
+      PostgresConnectionReaderString:
+        default: "Postgresql reader connection string(readonly) to use in the lambda to retrieve the data from Qatch database"
+      PostgresConnectionWriterString:
+        default: "Postgresql writer connection string(readonly) to use in the lambda to retrieve the data from Qatch database"
+      SecretName:
+        default: "Name of the secret to be created in AWS Secrets Manager"
+      # KmsKeyAlias:
+      #   default: "KMS Key Alias for swisscolony client"
+      QatchApiAccessKey:
+        default: "Access key for Qatch API for the given environment"
+      QatchApiAccessSecret:
+        default: "Access Secret for Qatch API for the given environment"
+      VpcId:
+        default: "VPC to associate Lambda with"
+      SubnetIds:
+        default: "Subnets for Lambda ENIs"
+      SecurityGroupIds:
+        default: "Security Groups for Lambda ENIs"
+      VpcEndpointIds:
+        default: "VPC Endpoint IDs for API Gateway Private integration"
+      S3Bucket:
+        default: "S3 bucket where the lambda packages resides"
+      LambdaS3TriggerKey:
+        default: "S3 bucket prefix to copy the lambda binary packages"
+      ExistingRoleArn:
+        default: "Existing Role to be associated in the given lambda"
+      QatchS3Bucket:
+        default: "Primary Qatch S3 bucket where call recordings are stored"
+      TriggerBucket:
+        default: "S3 bucket name for the trigger to be configured for Lambda for new Metadata JSON"
+      S3Key:
+        default: "S3 bucket prefix to copy the lambda binary packages for SQS Lambda"
+      SQSLambdaExistingRoleArn:
+        default: "Existing ARN Role for SQS Lambda"
+      QatchTokenEndpoint:
+        default: "Qatch API Token Endpoint"
+      QatchEndpoint:
+        default: "Qatch API Endpoint"
+
 Parameters:
-  VPCIDq:
+  VpcId:
     Type: "AWS::EC2::VPC::Id"
     Default: "vpc-08834460b465731a3"
-  PrivateSubnet1:
-    Type: "AWS::EC2::Subnet::Id"
-    Default: "subnet-0a32e71fe797499b6"
-  PrivateSubnet2:
-    Type: "AWS::EC2::Subnet::Id"
-    Default: "subnet-0896e97930e347628"
-  PrivateSecurityGroupID:
-    Type: 'AWS::EC2::SecurityGroup::Id'
-    Default: "sg-04fe11d44a2a879b2"
-  EnvType:
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Subnets for Lambda ENIs
+    Default: subnet-0a32e71fe797499b6,subnet-0896e97930e347628
+  SecurityGroupIds:
+    Type: List<AWS::EC2::SecurityGroup::Id>
+    Description: Security Groups for Lambda ENIs
+    Default: sg-04fe11d44a2a879b2
+  VpcEndpointIds:
+    Type: List<String>
+    Description: VPC Endpoint IDs for API Gateway Private integration
+    Default: "vpce-0909347d01c0b50fc"
+  Environment:
     Description: Environment type.
     Type: String
     AllowedValues: [dev, prod, qa]
@@ -26,11 +130,6 @@ Parameters:
     Type: String
     AllowedValues: [iqor]
     Default: iqor
-  Product:
-    Description: Product Info.
-    Type: String
-    AllowedValues: [qatch]
-    Default: qatch
   Owner:
     Description: Owner Info.
     Type: String
@@ -51,11 +150,28 @@ Parameters:
     Type: String
     AllowedValues: [qatch]
     Default: qatch
-  MapMigrated:
-    Description: Map migrated value for aws.
+  SecretName:
+    Description: Secret Name.
     Type: String
-    AllowedValues: [d-server-03od8pt5fvt8yh]
-    Default: d-server-03od8pt5fvt8yh
+    AllowedValues: [azure_to_aws]
+    Default: azure_to_aws
+  PostgresConnectionReaderString:
+    Type: String
+    Default: Server=qatch-db-us-qa-writer.iqor.qor.com;Port=5432;Database=qatch;User Id=qatchappreader;Password=mjY54g0ecNJcD6Km;ApplicationName=iQor.Qatch.Core.LiveQWebApi;timeout=60;
+    NoEcho: true                # ensures password is hidden in console/CLI
+    Description: Secure password input for connectionstring
+  PostgresConnectionWriterString:
+    Type: String
+    Default: Server=qatch-db-us-qa-writer.iqor.qor.com;Port=5432;Database=qatch;User Id=qatchappadmin;Password=g0U6137{(Kl6;ApplicationName=iQor.Qatch.Core.LiveQWebApi;timeout=60;
+    NoEcho: true                # ensures password is hidden in console/CLI
+    Description: Secure password input for connectionstring
+  Description:
+    Type: String
+    Default: "Copy Azure to AWS REST API"
+  SubProject:
+    Type: String
+    Default: Azure to AWS
+    Description: SubProject tag
 
 Globals:
   Function:
@@ -65,6 +181,38 @@ Globals:
     Tracing: Active  # Lambda X-Ray tracing
 
 Resources:
+  SecretData:
+    Type: AWS::SecretsManager::Secret
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Retain
+    Properties:
+      Name: !Sub copy-azure-to-aws/${Environment}/${SecretName}
+      Description: !Sub "Azure to AWS Rest Api for ${Environment} environment"
+      SecretString: !Sub |
+        {
+          "ConnectionStrings_ReaderConnection": "${PostgresConnectionReaderString}",
+          "ConnectionStrings_WriterConnection": "${PostgresConnectionWriterString}"
+        }
+      Tags:
+        - Key: Name
+          Value: !Sub SecretData
+        - Key: Description
+          Value: !Ref Description
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Client
+          Value: !Ref Client
+        - Key: CreatedBy
+          Value: !Ref CreatedBy
+        - Key: UpdatedBy
+          Value: !Ref UpdatedBy
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: Project
+          Value: !Ref Project
+        - Key: SubProject
+          Value: !Ref SubProject
+
   # Allow API Gateway to push execution logs to CloudWatch Logs (account-level)
   ApiGatewayCloudWatchRole:
     Type: AWS::IAM::Role
@@ -84,22 +232,14 @@ Resources:
     Properties:
       CloudWatchRoleArn: !GetAtt ApiGatewayCloudWatchRole.Arn
 
-  # Access log destination for API Gateway stage
-  RestApiAccessLogs:
-    Type: AWS::Logs::LogGroup
-    Properties:
-      LogGroupName: !Sub /aws/apigateway/${RestApiPrivate}-${EnvType}
-      RetentionInDays: 14
-
   RestApiPrivate:
     Type: AWS::Serverless::Api
     Properties:
       Name: copy-azure-to-aws-rest-private
-      StageName: !Ref EnvType
+      StageName: !Ref Environment
       EndpointConfiguration:
         Type: PRIVATE
-        VpcEndpointIds:
-          - vpce-0909347d01c0b50fc
+        VpcEndpointIds: !Ref VpcEndpointIds
       TracingEnabled: true
       MethodSettings:
         - ResourcePath: "/*"
@@ -146,27 +286,16 @@ Resources:
                 httpMethod: POST
                 uri:
                   Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${WebApiFunction.Arn}/invocations
-    Tags:
-      - Key: Name
-        Value: copy-azure-to-aws-rest-private
-      - Key: Description
-        Value: API Gateway
-      - Key: map-migrated
-        Value: !Ref MapMigrated
-      - Key: Client
-        Value: !Ref Client
-      - Key: Product
-        Value: !Ref Product
-      - Key: Environment
-        Value: !Ref EnvType
-      - Key: Owner
-        Value: !Ref Owner
-      - Key: Project
-        Value: !Ref Project
-      - Key: CreatedBy
-        Value: !Ref CreatedBy
-      - Key: UpdatedBy
-        Value: !Ref UpdatedBy
+      Tags:                       # SAM expects a MAP here (not a list)
+        Name: copy-azure-to-aws-rest-private
+        Description: !Ref Description
+        Environment: !Ref Environment
+        Client: !Ref Client
+        CreatedBy: !Ref CreatedBy
+        UpdatedBy: !Ref UpdatedBy
+        Owner: !Ref Owner
+        Project: !Ref Project
+        SubProject: !Ref SubProject
 
   WebApiFunction:
     Type: AWS::Serverless::Function
@@ -183,16 +312,17 @@ Resources:
             - Effect: Allow
               Action: sqs:SendMessage
               Resource: "*"
+            - Effect: Allow
+              Action:
+                - secretsmanager:GetSecretValue
+                - secretsmanager:DescribeSecret
+              Resource: !Ref SecretData   # CHANGED from !GetAtt SecretData.Arn
       VpcConfig:
-        SecurityGroupIds:
-          - !Ref PrivateSecurityGroupID
-        SubnetIds:
-          - !Ref PrivateSubnet1
-          - !Ref PrivateSubnet2
+        SecurityGroupIds: !Ref SecurityGroupIds   # FIXED (removed nested list)
+        SubnetIds: !Ref SubnetIds                 # FIXED (removed nested list)
       Environment:
         Variables:
-          ConnectionStrings__ReaderConnection: "Server=qatch-db-us-qa-writer.iqor.qor.com;Port=5432;Database=qatch;User Id=qatchappreader;Password=mjY54g0ecNJcD6Km;ApplicationName=iQor.Qatch.Core.LiveQWebApi;timeout=60;"
-          ConnectionStrings__WriterConnection: "Server=qatch-db-us-qa-writer.iqor.qor.com;Port=5432;Database=qatch;User Id=qatchappadmin;Password=g0U6137{(Kl6;ApplicationName=iQor.Qatch.Core.LiveQWebApi;timeout=60;"
+          SECRET_ID: !Sub copy-azure-to-aws/${Environment}/${SecretName}
           GetExtendedDataUsersCache: "dbo.fn_get_extended_data_users_cache|Reader"
           GetJwtTokenKey: "dbo.fn_get_jwt_token_key|Reader"
           AWS__SQS__QueueUrl: ""
@@ -209,27 +339,16 @@ Resources:
             RestApiId: !Ref RestApiPrivate
             Path: /{proxy+}
             Method: ANY
-    Tags:
-      - Key: Name
-        Value: copy-azure-to-aws-rest-private
-      - Key: Description
-        Value: API Gateway
-      - Key: map-migrated
-        Value: !Ref MapMigrated
-      - Key: Client
-        Value: !Ref Client
-      - Key: Product
-        Value: !Ref Product
-      - Key: Environment
-        Value: !Ref EnvType
-      - Key: Owner
-        Value: !Ref Owner
-      - Key: Project
-        Value: !Ref Project
-      - Key: CreatedBy
-        Value: !Ref CreatedBy
-      - Key: UpdatedBy
-        Value: !Ref UpdatedBy
+      Tags:
+        Name: copy-azure-to-aws-api-private
+        Description: !Ref Description
+        Environment: !Ref Environment
+        Client: !Ref Client
+        CreatedBy: !Ref CreatedBy
+        UpdatedBy: !Ref UpdatedBy
+        Owner: !Ref Owner
+        Project: !Ref Project
+        SubProject: !Ref SubProject
 
   ApiInvokePermission:
     Type: AWS::Lambda::Permission
@@ -239,10 +358,27 @@ Resources:
       Principal: apigateway.amazonaws.com
       SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${RestApiPrivate}/*/*/*
 
+  WebApiFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${WebApiFunction}-${Environment}
+      RetentionInDays: 90
+
+  # Access log destination for API Gateway stage
+  RestApiAccessLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/apigateway/${RestApiPrivate}-${Environment}
+      RetentionInDays: 90
+
 Outputs:
   ApiId:
     Value: !Ref RestApiPrivate
     Description: API Gateway REST API Id (PRIVATE)
   ApiInvokeUrl:
-    Value: !Sub https://${RestApiPrivate}.execute-api.${AWS::Region}.amazonaws.com/${EnvType}
+    Value: !Sub https://${RestApiPrivate}.execute-api.${AWS::Region}.amazonaws.com/${Environment}
     Description: Invoke URL (reachable only via the specified VPC endpoint)
+  SecretName:
+    Value: !Sub copy-azure-to-aws/${Environment}/${SecretName}
+  SecretArn:
+    Value: !Ref SecretData   # CHANGED from !GetAtt SecretData.Arn
