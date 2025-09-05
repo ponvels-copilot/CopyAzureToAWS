@@ -50,21 +50,39 @@ public class CallDetailsController : ControllerBase
 
         try
         {
-            await using var db = CreateDbContext(country, writer: false);
+            await using var dbContext = CreateDbContext(country, writer: false);
+
+            //Check if CallDetailID exists in call_recording_details and is marked as IsAzureCloudAudio = true
+            var callRecordingDetails = await dbContext.TableCallRecordingDetails
+                .AsNoTracking()
+                .FirstOrDefaultAsync(crd => crd.CallDetailID == request.CallDetailID && crd.AudioFile != null && crd.AudioFile.ToLower().Equals(request.AudioFile.ToLower()));
+
+            if (callRecordingDetails == null || callRecordingDetails.IsAzureCloudAudio != true)
+            {
+                return StatusCode((int)HttpStatusCode.BadRequest,
+                    new ApiResponse
+                    {
+                        IsSuccess = false,
+                        StatusCode = (int)HttpStatusCode.BadRequest,
+                        Message = callRecordingDetails == null ? $"AudioFile: {request.AudioFile}, CallDetailID: {request.CallDetailID} does not exist." : $"AudioFile: {request.AudioFile}, CallDetailID: {request.CallDetailID} is not a Azure call recording.",
+                        RequestId = requestId
+                    });
+            }
 
             // Existence check (Writer; could use reader if you prefer)
-            var exists = await db.TableAzureToAWSRequest
-                .AnyAsync(cd => cd.CallDetailID == request.CallDetailID);
+            var exists = await dbContext.TableAzureToAWSRequest
+            .AnyAsync(cd => cd.CallDetailID == request.CallDetailID);
 
             if (exists)
             {
-                return Conflict(new ApiResponse
-                {
-                    IsSuccess = false,
-                    StatusCode = (int)HttpStatusCode.BadRequest,
-                    Message = $"Calldetailid: {request.CallDetailID} already in processing state",
-                    RequestId = requestId
-                });
+                return StatusCode((int)HttpStatusCode.Conflict,
+                    new ApiResponse
+                    {
+                        IsSuccess = false,
+                        StatusCode = (int)HttpStatusCode.Conflict,
+                        Message = $"Calldetailid: {request.CallDetailID} already queued and in processing state now.",
+                        RequestId = requestId
+                    });
             }
 
             var row = new TableAzureToAWSRequest
@@ -90,13 +108,14 @@ public class CallDetailsController : ControllerBase
                     });
             }
 
-            return Ok(new ApiResponse
-            {
-                IsSuccess = true,
-                StatusCode = (int)HttpStatusCode.OK,
-                Message = $"Calldetailid: {request.CallDetailID} queued (Country={country}, Role=Writer).",
-                RequestId = requestId
-            });
+            return StatusCode((int)HttpStatusCode.OK,
+                    new ApiResponse
+                    {
+                        IsSuccess = true,
+                        StatusCode = (int)HttpStatusCode.OK,
+                        Message = $"Calldetailid: {request.CallDetailID} is queued sucessfully.",
+                        RequestId = requestId
+                    });
         }
         catch (Exception ex)
         {
