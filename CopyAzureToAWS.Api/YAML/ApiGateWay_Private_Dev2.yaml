@@ -357,8 +357,10 @@ Resources:
           GetJwtTokenKey: "dbo.fn_get_jwt_token_key|Reader"
           RecordAzureToAWSStatus: "dbo.usp_record_azure_to_aws_status|Writer"
           AWS__SQS__QueueUrl: !Ref CopyAzureToAWSRequestQueue
-          Logging__LogLevel__Default: Information         # optional
-          Logging__LogLevel__CopyAzureToAWS: Information  # optional namespace tuning
+          Logging__LogLevel__Default: Information                       # optional
+          Logging__LogLevel__Microsoft: Information                     # optional
+          Logging__LogLevel__Microsoft_AspNetCore: Information          # optional
+          Logging__LogLevel__CopyAzureToAWS: Information                # optional namespace tuning
       Events:
         ApiRoot:
           Type: Api
