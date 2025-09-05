@@ -22,8 +22,8 @@ Metadata:
         Parameters:
           - PostgresConnectionUSReaderString
           - PostgresConnectionUSWriterString
-          - PostgresConnectionUSReaderString
-          - PostgresConnectionUSWriterString
+          - PostgresConnectionCAReaderString
+          - PostgresConnectionCAWriterString
       - Label:
           default: "General Configuration"
         Parameters:
@@ -52,7 +52,7 @@ Metadata:
 
     ParameterLabels:
       Environment:
-        default: "Tag for Deployment Environment (dev,alpha, prod)"
+        default: "Tag for Deployment Environment (dev, alpha, prod)"
       Client:
         default: "Tag for Client "
       Project:
@@ -163,23 +163,24 @@ Parameters:
     Type: String
     Default: Server=qatch-db-us-qa-writer.iqor.qor.com;Port=5432;Database=qatch;User Id=qatchappreader;Password=mjY54g0ecNJcD6Km;ApplicationName=Azure_to_AWS_WebApi;timeout=60;
     NoEcho: true                # ensures password is hidden in console/CLI
-    Description: Secure password input for connectionstring
+    Description: US Reader - Secure password input for connectionstring
   PostgresConnectionUSWriterString:
     Type: String
     Default: Server=qatch-db-us-qa-writer.iqor.qor.com;Port=5432;Database=qatch;User Id=qatchappadmin;Password=g0U6137{(Kl6;ApplicationName=Azure_to_AWS_WebApi;timeout=60;
     NoEcho: true                # ensures password is hidden in console/CLI
-    Description: Secure password input for connectionstring
+    Description: US Writer - Secure password input for connectionstring
   PostgresConnectionCAReaderString:
     Type: String
     Default: Server=qatch-db-ca-qa-reader.iqor.qor.com;Port=5432;Database=qatch_qa;User Id=qatchappreader;Password=9V1yQ'2n/8^P;ApplicationName=Azure_to_AWS_WebApi;timeout=60;
     NoEcho: true                # ensures password is hidden in console/CLI
-    Description: Secure password input for connectionstring
+    Description: CA Reader - Secure password input for connectionstring
   PostgresConnectionCAWriterString:
     Type: String
     Default: Server=qatch-db-ca-qa-writer.iqor.qor.com;Port=5432;Database=qatch_qa;User Id=qatchappadmin;Password=j=9r}1[CA102;ApplicationName=Azure_to_AWS_WebApi;timeout=60;
     NoEcho: true                # ensures password is hidden in console/CLI
-    Description: Secure password input for connectionstring
+    Description: CA Writer - Secure password input for connectionstring
   Description:
+    Description: Description Info.
     Type: String
     Default: "Copy Azure to AWS REST API"
   SubProject:
@@ -195,6 +196,10 @@ Globals:
     Tracing: Active  # Lambda X-Ray tracing
 
 Resources:
+  ########################################################################## 
+  # Secret storing multiple database connection strings in a single JSON document
+  # referenced by application code via SECRET_ID. Update keys atomically here.
+  ##########################################################################
   SecretData:
     Type: AWS::SecretsManager::Secret
     DeletionPolicy: Delete
@@ -229,7 +234,9 @@ Resources:
         - Key: SubProject
           Value: !Ref SubProject
 
-  # Allow API Gateway to push execution logs to CloudWatch Logs (account-level)
+  ##########################################################################
+  # IAM role enabling API Gateway to publish execution logs to CloudWatch
+  ##########################################################################
   ApiGatewayCloudWatchRole:
     Type: AWS::IAM::Role
     Properties:
@@ -243,11 +250,15 @@ Resources:
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AmazonAPIGatewayPushToCloudWatchLogs
 
+  # Associates the account-level CloudWatch Logs role with API Gateway
   ApiGatewayAccount:
     Type: AWS::ApiGateway::Account
     Properties:
       CloudWatchRoleArn: !GetAtt ApiGatewayCloudWatchRole.Arn
 
+  ##########################################################################
+  # Private REST API fronting the Lambda (proxy integration, VPC endpoint restricted)
+  ##########################################################################
   RestApiPrivate:
     Type: AWS::Serverless::Api
     Properties:
@@ -302,7 +313,7 @@ Resources:
                 httpMethod: POST
                 uri:
                   Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${WebApiFunction.Arn}/invocations
-      Tags:                       # SAM expects a MAP here (not a list)
+      Tags:
         Name: copy-azure-to-aws-rest-private
         Description: !Ref Description
         Environment: !Ref Environment
@@ -313,6 +324,9 @@ Resources:
         Project: !Ref Project
         SubProject: !Ref SubProject
 
+  ##########################################################################
+  # Lambda handling API requests (producer of SQS messages later if wired)
+  ##########################################################################
   WebApiFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -327,22 +341,22 @@ Resources:
         - Statement:
             - Effect: Allow
               Action: sqs:SendMessage
-              Resource: "*"
+              Resource: !GetAtt CopyAzureToAWSRequestQueue.Arn
             - Effect: Allow
               Action:
                 - secretsmanager:GetSecretValue
                 - secretsmanager:DescribeSecret
-              Resource: !Ref SecretData   # CHANGED from !GetAtt SecretData.Arn
+              Resource: !Ref SecretData
       VpcConfig:
-        SecurityGroupIds: !Ref SecurityGroupIds   # FIXED (removed nested list)
-        SubnetIds: !Ref SubnetIds                 # FIXED (removed nested list)
+        SecurityGroupIds: !Ref SecurityGroupIds
+        SubnetIds: !Ref SubnetIds
       Environment:
         Variables:
           SECRET_ID: !Sub copy-azure-to-aws/${Environment}/${SecretName}
           GetExtendedDataUsersCache: "dbo.fn_get_extended_data_users_cache|Reader"
-          GetJwtTokenKey: "dbo.fn_get_jwt_token_key|Reader",
+          GetJwtTokenKey: "dbo.fn_get_jwt_token_key|Reader"
           RecordAzureToAWSStatus: "dbo.sp_record_azure_to_aws_status|Writer"
-          AWS__SQS__QueueUrl: ""
+          AWS__SQS__QueueUrl: !Ref CopyAzureToAWSRequestQueue
       Events:
         ApiRoot:
           Type: Api
@@ -367,6 +381,9 @@ Resources:
         Project: !Ref Project
         SubProject: !Ref SubProject
 
+  ##########################################################################
+  # Permission allowing API Gateway to invoke the Lambda integration
+  ##########################################################################
   ApiInvokePermission:
     Type: AWS::Lambda::Permission
     Properties:
@@ -375,20 +392,106 @@ Resources:
       Principal: apigateway.amazonaws.com
       SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${RestApiPrivate}/*/*/*
 
+  ##########################################################################
+  # Dedicated log group with retention for WebApiFunction
+  ##########################################################################
   WebApiFunctionLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: !Sub /aws/lambda/${WebApiFunction}-${Environment}
       RetentionInDays: 90
 
+  ##########################################################################
   # Access log destination for API Gateway stage
+  ##########################################################################
   RestApiAccessLogs:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: !Sub /aws/apigateway/${RestApiPrivate}-${Environment}
       RetentionInDays: 90
 
+  ###########################################################################
+  # NEW: Dead-letter FIFO queue for failed copy requests
+  ###########################################################################
+  CopyAzureToAWSRequestQueueDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: copy-azure-to-aws-request-dlq.fifo
+      FifoQueue: true
+      ContentBasedDeduplication: true
+      MessageRetentionPeriod: 1209600
+
+  ###########################################################################
+  # NEW: Primary FIFO queue for copy requests
+  ###########################################################################
+  CopyAzureToAWSRequestQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: copy-azure-to-aws-request.fifo
+      FifoQueue: true
+      ContentBasedDeduplication: true
+      VisibilityTimeout: 180
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt CopyAzureToAWSRequestQueueDLQ.Arn
+        maxReceiveCount: 5
+
+  ###########################################################################
+  # NEW: Processor Lambda consuming the primary queue
+  ###########################################################################
+  CopyProcessorFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: copy-azure-to-aws-processor
+      CodeUri:
+        Bucket: awsuse1dev2stiqor01
+        Key: lambdas/Azure_to_AWS/CopyAzureToAWS.Lambda.zip
+      Handler: CopyAzureToAWS.Lambda::CopyAzureToAWS.Function::FunctionHandler
+      Runtime: dotnet8
+      MemorySize: 1536
+      Timeout: 180
+      Tracing: Active
+      VpcConfig:
+        SecurityGroupIds: !Ref SecurityGroupIds
+        SubnetIds: !Ref SubnetIds
+      Environment:
+        Variables:
+          SECRET_ID: !Sub copy-azure-to-aws/${Environment}/${SecretName}
+          SOURCE_SYSTEM: "AZURE"
+          TARGET_SYSTEM: "AWS"
+          QUEUE_URL: !Ref CopyAzureToAWSRequestQueue
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - AWSLambdaVPCAccessExecutionRole
+        - Statement:
+            - Effect: Allow
+              Action:
+                - sqs:ReceiveMessage
+                - sqs:DeleteMessage
+                - sqs:GetQueueAttributes
+                - sqs:ChangeMessageVisibility
+              Resource: !GetAtt CopyAzureToAWSRequestQueue.Arn
+            - Effect: Allow
+              Action:
+                - sqs:GetQueueAttributes
+                - sqs:ReceiveMessage
+                - sqs:DeleteMessage
+              Resource: !GetAtt CopyAzureToAWSRequestQueueDLQ.Arn
+            - Effect: Allow
+              Action:
+                - secretsmanager:GetSecretValue
+                - secretsmanager:DescribeSecret
+              Resource: !Ref SecretData
+      Events:
+        CopyQueueEvent:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt CopyAzureToAWSRequestQueue.Arn
+            BatchSize: 1
+            MaximumBatchingWindowInSeconds: 0
+            Enabled: true
+
 Outputs:
+  # Core API + secret identifiers
   ApiId:
     Value: !Ref RestApiPrivate
     Description: API Gateway REST API Id (PRIVATE)
@@ -398,4 +501,15 @@ Outputs:
   SecretName:
     Value: !Sub copy-azure-to-aws/${Environment}/${SecretName}
   SecretArn:
-    Value: !Ref SecretData   # CHANGED from !GetAtt SecretData.Arn
+    Value: !Ref SecretData
+  # Messaging and processing outputs for observability and wiring other stacks
+  PrimaryQueueUrl:
+    Value: !Ref CopyAzureToAWSRequestQueue
+  PrimaryQueueArn:
+    Value: !GetAtt CopyAzureToAWSRequestQueue.Arn
+  DLQQueueUrl:
+    Value: !Ref CopyAzureToAWSRequestQueueDLQ
+  DLQQueueArn:
+    Value: !GetAtt CopyAzureToAWSRequestQueueDLQ.Arn
+  ProcessorFunctionName:
+    Value: !Ref CopyProcessorFunction

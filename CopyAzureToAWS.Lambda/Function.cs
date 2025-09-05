@@ -29,52 +29,52 @@ public class Function
     /// <param name="evnt">SQS event containing messages</param>
     /// <param name="context">Lambda context</param>
     /// <returns>Task</returns>
-    public async Task FunctionHandler(SQSEvent evnt, ILambdaContext context)
+    public static async Task FunctionHandler(SQSEvent evnt, ILambdaContext context)
     {
-        //foreach (var message in evnt.Records)
-        //{
-        //    await ProcessMessage(message, context);
-        //}
+        foreach (var message in evnt.Records)
+        {
+            await ProcessMessage(message, context);
+        }
     }
 
-    //private async Task ProcessMessage(SQSEvent.SQSMessage message, ILambdaContext context)
-    //{
-    //    try
-    //    {
-    //        context.Logger.LogInformation($"Processing message: {message.MessageId}");
+    private static async Task ProcessMessage(SQSEvent.SQSMessage message, ILambdaContext context)
+    {
+        try
+        {
+            context.Logger.LogInformation($"Processing message: {message.MessageId}");
 
-    //        // Parse the SQS message
-    //        var sqsMessage = JsonSerializer.Deserialize<SqsMessage>(message.Body);
-    //        if (sqsMessage == null)
-    //        {
-    //            context.Logger.LogError("Failed to deserialize SQS message");
-    //            return;
-    //        }
+            // Parse the SQS message
+            var sqsMessage = JsonSerializer.Deserialize<SqsMessage>(message.Body);
+            if (sqsMessage == null)
+            {
+                context.Logger.LogError("Failed to deserialize SQS message");
+                return;
+            }
 
-    //        // Set up database context
-    //        var connectionString = Environment.GetEnvironmentVariable("CONNECTION_STRING");
-    //        if (string.IsNullOrEmpty(connectionString))
-    //        {
-    //            context.Logger.LogError("Database connection string not configured");
-    //            return;
-    //        }
+            // Set up database context
+            var connectionString = Environment.GetEnvironmentVariable("CONNECTION_STRING");
+            if (string.IsNullOrEmpty(connectionString))
+            {
+                context.Logger.LogError("Database connection string not configured");
+                return;
+            }
 
-    //        var optionsBuilder = new DbContextOptionsBuilder<ApplicationDbContext>();
-    //        optionsBuilder.UseSqlServer(connectionString);
+            var optionsBuilder = new DbContextOptionsBuilder<ApplicationDbContext>();
+            optionsBuilder.UseSqlServer(connectionString);
 
-    //        using var dbContext = new ApplicationDbContext(optionsBuilder.Options);
+            using var dbContext = new ApplicationDbContext(optionsBuilder.Options);
 
-    //        // Update status to Processing
-    //        await UpdateCallDetailStatus(dbContext, sqsMessage.CallDetailId, "Processing", null, context);
+            // Update status to Processing
+            //await UpdateCallDetailStatus(dbContext, sqsMessage.CallDetailId, "Processing", null, context);
 
-    //        // Copy file from Azure to S3
-    //        await CopyAzureToS3(dbContext, sqsMessage, context);
-    //    }
-    //    catch (Exception ex)
-    //    {
-    //        context.Logger.LogError($"Error processing message {message.MessageId}: {ex.Message}");
-    //    }
-    //}
+            // Copy file from Azure to S3
+            //await CopyAzureToS3(dbContext, sqsMessage, context);
+        }
+        catch (Exception ex)
+        {
+            context.Logger.LogError($"Error processing message {message.MessageId}: {ex.Message}");
+        }
+    }
 
     //private async Task CopyAzureToS3(ApplicationDbContext dbContext, SqsMessage sqsMessage, ILambdaContext context)
     //{
@@ -107,7 +107,7 @@ public class Function
     //        };
 
     //        var uploadResponse = await _s3Client.PutObjectAsync(uploadRequest);
-            
+
     //        // Get S3 object MD5 checksum
     //        var getObjectRequest = new GetObjectRequest
     //        {
@@ -121,7 +121,7 @@ public class Function
     //            await getObjectResponse.ResponseStream.CopyToAsync(s3Stream);
     //        }
     //        s3Stream.Position = 0;
-            
+
     //        var s3Md5 = CalculateMD5(s3Stream);
 
     //        // Compare MD5 checksums
@@ -132,7 +132,7 @@ public class Function
     //            // Update database with S3 details and MD5
     //            var callDetail = await dbContext.TableAzureToAWSRequest
     //                .FirstOrDefaultAsync(cd => cd.CallDetailId == sqsMessage.CallDetailId);
-                
+
     //            if (callDetail != null)
     //            {
     //                callDetail.S3Key = s3Key;
@@ -174,7 +174,7 @@ public class Function
     //        {
     //            callDetail.Status = status;
     //            callDetail.UpdatedAt = DateTime.UtcNow;
-                
+
     //            if (!string.IsNullOrEmpty(errorMessage))
     //            {
     //                callDetail.ErrorMessage = errorMessage;

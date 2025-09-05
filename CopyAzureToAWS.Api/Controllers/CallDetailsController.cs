@@ -107,6 +107,27 @@ public class CallDetailsController : ControllerBase
                         RequestId = requestId
                     });
             }
+            else
+            {
+                // Queue message
+                var sqsMessage = new SqsMessage
+                {
+                    CallDetailID = request.CallDetailID,
+                    AudioFileName = request.AudioFile
+                };
+                var queued = await _sqsService.SendMessageAsync(sqsMessage);
+                if (!queued)
+                {
+                    return StatusCode((int)HttpStatusCode.InternalServerError,
+                        new ApiResponse
+                        {
+                            IsSuccess = false,
+                            StatusCode = (int)HttpStatusCode.InternalServerError,
+                            Message = $"Failed to queue message for CallDetailID {request.CallDetailID}",
+                            RequestId = requestId
+                        });
+                }
+            }
 
             return StatusCode((int)HttpStatusCode.OK,
                     new ApiResponse
