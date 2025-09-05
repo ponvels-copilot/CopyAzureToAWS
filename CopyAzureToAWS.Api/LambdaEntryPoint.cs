@@ -1,11 +1,14 @@
 using Amazon.Lambda.AspNetCoreServer;
-using Microsoft.AspNetCore.Hosting;
-using Microsoft.Extensions.Configuration;
 using Amazon.SecretsManager;
 using Amazon.SecretsManager.Model;
-using System.Text.Json;
-using System.Collections.Generic;
+using Amazon.SQS;
+using CopyAzureToAWS.Api.Configuration;
 using CopyAzureToAWS.Api.Secrets;
+using CopyAzureToAWS.Api.Services;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.Extensions.Configuration;
+using System.Collections.Generic;
+using System.Text.Json;
 
 namespace CopyAzureToAWS.Api
 {
@@ -13,26 +16,41 @@ namespace CopyAzureToAWS.Api
     {
         protected override void Init(IWebHostBuilder builder)
         {
-            builder.ConfigureAppConfiguration((ctx, config) =>
-            {
-                // Start clean (no appsettings.json in Lambda)
-                config.Sources.Clear();
-
-                // Include environment variables (gives us SECRET_ID and others)
-                config.AddEnvironmentVariables();
-
-                var interim = config.Build();
-                var secretId = interim["SECRET_ID"];
-
-                if (!string.IsNullOrWhiteSpace(secretId))
+            builder
+                .ConfigureAppConfiguration((ctx, config) =>
                 {
-                    var injected = TryLoadSecret(secretId);
-                    if (injected.Count > 0)
+                    // Start clean (no appsettings.json in Lambda)
+                    config.Sources.Clear();
+
+                    // Include environment variables (gives us SECRET_ID and others)
+                    config.AddEnvironmentVariables();
+
+                    var interim = config.Build();
+                    var secretId = interim["SECRET_ID"];
+
+                    if (!string.IsNullOrWhiteSpace(secretId))
                     {
-                        config.AddInMemoryCollection(injected);
+                        var injected = TryLoadSecret(secretId);
+                        if (injected.Count > 0)
+                        {
+                            config.AddInMemoryCollection(injected);
+                        }
                     }
-                }
-            });
+                })
+                .ConfigureServices((ctx, services) =>
+                {
+                    services.AddApiServices(ctx.Configuration);
+                    // Add authentication + JWT registration here (or move into AddApiServices if shared)
+                })
+                .Configure(app =>
+                {
+                    app.UseSwagger();
+                    app.UseSwaggerUI();
+                    app.UseHttpsRedirection();
+                    app.UseAuthentication();
+                    app.UseAuthorization();
+                    //app.MapControllers();
+                });
 
             builder.UseStartup<Startup>();
         }

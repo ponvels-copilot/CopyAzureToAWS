@@ -1,4 +1,5 @@
 using Amazon.SQS;
+using CopyAzureToAWS.Api;
 using CopyAzureToAWS.Api.Configuration;
 using CopyAzureToAWS.Api.Infrastructure.Logging;
 using CopyAzureToAWS.Api.Services;
@@ -38,6 +39,7 @@ builder.Services.AddSingleton<IJwtKeyProvider, PgJwtKeyProvider>();
 builder.Services.AddScoped<ITokenService, TokenService>();
 builder.Services.AddScoped<ISqsService, SqsService>();
 builder.Services.AddScoped<IUserAccessService, PgUserAccessService>();
+builder.Services.AddApiServices(builder.Configuration);
 
 // JWT auth (unchanged)
 using (var sp = builder.Services.BuildServiceProvider())
