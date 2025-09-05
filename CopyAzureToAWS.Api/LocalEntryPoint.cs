@@ -18,17 +18,17 @@ namespace CopyAzureToAWS.Api
                     // Force local to use appsettings.json only
                     config.Sources.Clear();
 
-                    var env = ctx.HostingEnvironment;
-                    config
-                        .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)
-                        .AddJsonFile($"appsettings.{env.EnvironmentName}.json", optional: true, reloadOnChange: true);
+                    //var env = ctx.HostingEnvironment;
+                    //config
+                    //    .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)
+                    //    .AddJsonFile($"appsettings.{env.EnvironmentName}.json", optional: true, reloadOnChange: true);
 
 #if DEBUG
-                    if (env.IsDevelopment())
-                    {
-                        // Optional: enable user-secrets locally
-                        config.AddUserSecrets<LocalEntryPoint>(optional: true);
-                    }
+                    //if (env.IsDevelopment())
+                    //{
+                    //    // Optional: enable user-secrets locally
+                    //    config.AddUserSecrets<LocalEntryPoint>(optional: true);
+                    //}
 #endif
                     // Intentionally NOT adding environment variables here
                 })

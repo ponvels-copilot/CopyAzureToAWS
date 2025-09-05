@@ -22,18 +22,6 @@ public class ApiResponse
     public string RequestId { get; set; } = string.Empty;
 }
 
-public class AzureToAWSRequest
-{
-    [Required, StringLength(2, MinimumLength = 2, ErrorMessage = "CountryCode must be a 2-letter code")]
-    public string? CountryCode { get; set; }
-
-    [Required]
-    public long CallDetailID { get; set; }
-
-    [Required]
-    public string AudioFile { get; set; } = string.Empty;
-}
-
 public class CallDetailRequest
 {
     public long CallDetailID { get; set; }
@@ -52,15 +40,6 @@ public class CallDetailResponse
     public DateTime CreatedAt { get; set; }
     public DateTime? UpdatedAt { get; set; }
     public string? ErrorMessage { get; set; }
-}
-
-public class SqsMessage
-{
-    public long CallDetailID { get; set; }
-    public string AudioFileName { get; set; } = string.Empty;
-    public string AzureConnectionString { get; set; } = string.Empty;
-    public string AzureBlobUrl { get; set; } = string.Empty;
-    public string S3BucketName { get; set; } = string.Empty;
 }
 
 public class ExtendedDataUsers

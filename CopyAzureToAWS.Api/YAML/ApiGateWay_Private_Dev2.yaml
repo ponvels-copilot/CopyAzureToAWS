@@ -355,8 +355,10 @@ Resources:
           SECRET_ID: !Sub copy-azure-to-aws/${Environment}/${SecretName}
           GetExtendedDataUsersCache: "dbo.fn_get_extended_data_users_cache|Reader"
           GetJwtTokenKey: "dbo.fn_get_jwt_token_key|Reader"
-          RecordAzureToAWSStatus: "dbo.sp_record_azure_to_aws_status|Writer"
+          RecordAzureToAWSStatus: "dbo.usp_record_azure_to_aws_status|Writer"
           AWS__SQS__QueueUrl: !Ref CopyAzureToAWSRequestQueue
+          Logging__LogLevel__Default: Information         # optional
+          Logging__LogLevel__CopyAzureToAWS: Information  # optional namespace tuning
       Events:
         ApiRoot:
           Type: Api
@@ -398,7 +400,7 @@ Resources:
   WebApiFunctionLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub /aws/lambda/${WebApiFunction}-${Environment}
+      LogGroupName: !Sub /aws/lambda/${WebApiFunction}
       RetentionInDays: 90
 
   ##########################################################################
@@ -407,7 +409,7 @@ Resources:
   RestApiAccessLogs:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub /aws/apigateway/${RestApiPrivate}-${Environment}
+      LogGroupName: !Sub /aws/apigateway/${RestApiPrivate}
       RetentionInDays: 90
 
   ###########################################################################

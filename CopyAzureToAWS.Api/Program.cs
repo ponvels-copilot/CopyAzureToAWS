@@ -1,29 +1,45 @@
+using Amazon.SQS;
+using CopyAzureToAWS.Api.Configuration;
+using CopyAzureToAWS.Api.Infrastructure.Logging;
+using CopyAzureToAWS.Api.Services;
+using CopyAzureToAWS.Data;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
-using CopyAzureToAWS.Data;
-using CopyAzureToAWS.Api.Services;
+using System;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Add services to the container
+// Logging (optional explicit providers)
+builder.Logging.AddConsole();
+
+// Add framework services
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 builder.Services.AddMemoryCache();
 builder.Services.AddAuthorization();
 
-// Add Entity Framework (PostgreSQL) - default to writer
+// EF Core
 builder.Services.AddDbContext<ApplicationDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("WriterConnection")));
 
-// Register custom services
+// Options binding for SQS
+builder.Services.Configure<SqsOptions>(opts =>
+{
+    opts.QueueUrl = builder.Configuration["AWS:Sqs:QueueUrl"]
+                    ?? builder.Configuration["AWS:Sqs:QueueUrl"]
+                    ?? Environment.GetEnvironmentVariable("AWS__SQS__QueueUrl");
+    opts.Region = builder.Configuration["Sqs:Region"];
+});
+
+// Custom services
 builder.Services.AddSingleton<IJwtKeyProvider, PgJwtKeyProvider>();
 builder.Services.AddScoped<ITokenService, TokenService>();
 builder.Services.AddScoped<ISqsService, SqsService>();
 builder.Services.AddScoped<IUserAccessService, PgUserAccessService>();
 
-// Resolve signing key from DB (PostgreSQL)
+// JWT auth (unchanged)
 using (var sp = builder.Services.BuildServiceProvider())
 {
     var keyProvider = sp.GetRequiredService<IJwtKeyProvider>();
@@ -49,16 +65,17 @@ using (var sp = builder.Services.BuildServiceProvider())
     });
 }
 
+var logger = builder.Logging.Services.BuildServiceProvider().GetRequiredService<ILogger<Program>>();
+//logger.WriteLog("Version", $"Starting CopyAzureToAWS.Api version:", "TEST", true);
+Console.WriteLine("VERSION:1.0.0.0");
+
 var app = builder.Build();
 
-// Configure the HTTP request pipeline
 app.UseSwagger();
 app.UseSwaggerUI();
 
 app.UseHttpsRedirection();
 app.UseAuthentication();
 app.UseAuthorization();
-
 app.MapControllers();
-
 app.Run();
