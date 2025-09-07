@@ -18,8 +18,15 @@ using Amazon.XRay.Recorder.Handlers.AwsSdk;
 using Amazon.SecretsManager.Model;
 using System.Collections.Concurrent;
 using CopyAzureToAWS.Common.Utilities;
+using Azure.Storage.Blobs;
+using Azure.Storage.Blobs.Models;
+using Azure;
+using Azure.Identity;
+using Azure.Security.KeyVault.Secrets;
+using System.Text;
+using System.IO;
 
-[assembly: LambdaSerializer(typeof(Amazon.Lambda.Serialization.SystemTextJson.DefaultLambdaJsonSerializer))]
+//[assembly: LambdaSerializer(typeof(Amazon.Lambda.Serialization.SystemTextJson.DefaultLambdaJsonSerializer))]
 
 namespace CopyAzureToAWS.Lambda;
 
@@ -169,10 +176,10 @@ public class Function
 
             var optionsBuilder = new DbContextOptionsBuilder<ApplicationDbContext>();
             optionsBuilder.UseNpgsql(connectionString);
-            
+
             using var dbContext = new ApplicationDbContext(optionsBuilder.Options);
 
-            // Retrieve combined call info (programcode + recording info)
+            // FIX: Use AudioFileName (property in SqsMessage) instead of AudioFile
             var storageInfo = await GetCallDetailsInfoAsync(
                 dbContext,
                 sqsMessage.CallDetailID,
@@ -189,7 +196,6 @@ public class Function
                 $"Joined Call Detail -> CallDetailID={storageInfo.CallDetailID} ProgramCode={storageInfo.ProgramCode ?? "NULL"} " +
                 $"AudioFile={storageInfo.AudioFile ?? "NULL"} IsAzureCloudAudio={storageInfo.IsAzureCloudAudio} Location={storageInfo.AudioFileLocation ?? "NULL"}");
 
-            // ADDED: Fetch default Azure storage definition
             var azureStorage = await GetDefaultAzureStorageAsync(dbContext);
             if (azureStorage == null)
             {
@@ -197,7 +203,6 @@ public class Function
                 return;
             }
 
-            // ADDED: Deserialize JSON blob into typed config
             var storageConfig = ParseStorageConfig(azureStorage, context);
             if (storageConfig?.MSAzureBlob == null)
             {
@@ -213,9 +218,32 @@ public class Function
             string AccountKey = Aes256CbcEncrypter.Decrypt(storageConfig.MSAzureBlob.AccountKey);
             string ConnectionString = Aes256CbcEncrypter.Decrypt(storageConfig.MSAzureBlob.ConnectionString);
 
+            bool isEncryptedAudio = storageInfo.IsAzureCloudAudio == true && false; // TODO: real encryption flag
 
-            // TODO: use storageInfo + storageConfig to locate and copy the blob.
-            // Copy logic would go here...
+            // Choose blob path (prefer location then filename)
+            //var blobPath = storageInfo.AudioFileLocation ?? storageInfo.AudioFile ?? sqsMessage.AudioFile;
+            var blobPath = string.Concat(storageInfo.AudioFileLocation, "/",  storageInfo.AudioFile);
+            if (string.IsNullOrWhiteSpace(blobPath))
+            {
+                context.Logger.LogError("Blob path could not be determined.");
+                return;
+            }
+
+            var localFile = await DownloadAndDecryptIfNeededAsync(
+                storageConfig,
+                blobPath,
+                null,
+                isEncryptedAudio,
+                null,
+                context);
+
+            if (localFile == null)
+            {
+                context.Logger.LogError("Failed to obtain audio file locally.");
+                return;
+            }
+
+            // TODO: Upload to S3 / checksum / status update
         }
         catch (Exception ex)
         {
@@ -428,5 +456,254 @@ public class Function
         });
 
         Console.WriteLine(sJsonMsg);
+    }
+
+    /// <summary>
+    /// High-level helper that downloads an Azure blob, writes it to /tmp,
+    /// and optionally decrypts it using a key stored in Azure Key Vault.
+    /// </summary>
+    /// <param name="storageConfig">Parsed storage JSON (includes blob + key vault info).</param>
+    /// <param name="blobVirtualPath">
+    /// The full blob path (container/virtualfolders/file) OR if containerName supplied,
+    /// this should be the blob name inside that container.
+    /// </param>
+    /// <param name="explicitContainer">Optional explicit container name (if you split path externally).</param>
+    /// <param name="isEncrypted">Whether the blob content is encrypted.</param>
+    /// <param name="encryptionKeySecretName">
+    /// Secret name in Key Vault containing the encryption key (if null and encrypted, we will attempt 'audio-encryption-key').
+    /// </param>
+    /// <returns>Local file path (decrypted if encryption applied) or null on failure.</returns>
+    private async Task<string?> DownloadAndDecryptIfNeededAsync(
+        StorageConfig storageConfig,
+        string blobVirtualPath,
+        string? explicitContainer,
+        bool isEncrypted,
+        string? encryptionKeySecretName,
+        ILambdaContext context,
+        CancellationToken ct = default)
+    {
+        if (storageConfig?.MSAzureBlob == null)
+        {
+            context.Logger.LogError("DownloadAndDecryptIfNeededAsync: Missing Azure blob configuration.");
+            return null;
+        }
+
+        var connStr = Aes256CbcEncrypter.Decrypt(storageConfig.MSAzureBlob.ConnectionString);
+        if (string.IsNullOrWhiteSpace(connStr))
+        {
+            context.Logger.LogError("DownloadAndDecryptIfNeededAsync: Azure blob connection string absent (ensure decrypted first).");
+            return null;
+        }
+
+        // 1. Download blob into memory
+        var (containerName, blobName) = ResolveContainerAndBlob(explicitContainer, blobVirtualPath, context);
+        if (containerName == null || blobName == null)
+            return null;
+
+        var originalStream = await DownloadBlobToStreamAsync(connStr, containerName, blobName, context, ct);
+        if (originalStream == null)
+        {
+            context.Logger.LogError("DownloadAndDecryptIfNeededAsync: Blob download failed.");
+            return null;
+        }
+
+        // 2. Write raw (possibly encrypted) file
+        var tmpDir = ".";
+        var rawFileName = Path.GetFileName(blobName);
+        if (string.IsNullOrWhiteSpace(rawFileName))
+            rawFileName = $"blob_{Guid.NewGuid():N}";
+
+        var rawPath = Path.Combine(tmpDir, rawFileName);
+        await using (var fs = File.Create(rawPath))
+        {
+            originalStream.Position = 0;
+            await originalStream.CopyToAsync(fs, ct);
+        }
+
+        context.Logger.LogInformation($"Saved blob to {rawPath} (Encrypted={isEncrypted}) Size={new FileInfo(rawPath).Length}");
+
+        if (!isEncrypted)
+            return rawPath;
+
+        // 3. If encrypted: fetch key from Key Vault and decrypt to a new file
+        if (storageConfig.MSAzureKeyVault == null)
+        {
+            context.Logger.LogError("DownloadAndDecryptIfNeededAsync: Encryption flagged but no Key Vault configuration provided.");
+            return null;
+        }
+
+        var secretName = encryptionKeySecretName ?? "audio-encryption-key";
+        var (keyBytes, ivBytes) = await ResolveEncryptionKeyAndIvAsync(storageConfig.MSAzureKeyVault, secretName, context, ct);
+        if (keyBytes == null)
+        {
+            context.Logger.LogError($"DownloadAndDecryptIfNeededAsync: Unable to resolve encryption secret '{secretName}'.");
+            return null;
+        }
+
+        var decryptedPath = Path.Combine(tmpDir, Path.GetFileNameWithoutExtension(rawFileName) + "_decrypted" + Path.GetExtension(rawFileName));
+        try
+        {
+            await DecryptFileAesCbcAsync(rawPath, decryptedPath, keyBytes, ivBytes, context, ct);
+            context.Logger.LogInformation($"Decrypted file written to {decryptedPath}");
+            return decryptedPath;
+        }
+        catch (Exception ex)
+        {
+            context.Logger.LogError($"Decryption failed: {ex.Message}");
+            return null;
+        }
+        finally
+        {
+            // Optional: remove raw encrypted file to save /tmp space if not needed
+            // File.Delete(rawPath);
+        }
+    }
+
+    /// <summary>
+    /// Splits container and blob name if container not explicitly supplied.
+    /// </summary>
+    private (string? container, string? blob) ResolveContainerAndBlob(string? containerOverride, string fullOrPartialPath, ILambdaContext ctx)
+    {
+        if (!string.IsNullOrWhiteSpace(containerOverride))
+            return (containerOverride.Trim(), fullOrPartialPath.TrimStart('/'));
+
+        var trimmed = fullOrPartialPath.TrimStart('/');
+        var parts = trimmed.Split('/', 2, StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length < 2)
+        {
+            ctx.Logger.LogError("ResolveContainerAndBlob: Cannot infer container from path. Provide explicit container.");
+            return (null, null);
+        }
+        return (parts[0], parts[1]);
+    }
+
+    /// <summary>
+    /// Core Azure blob downloader into MemoryStream.
+    /// </summary>
+    private async Task<MemoryStream?> DownloadBlobToStreamAsync(
+        string connectionString,
+        string container,
+        string blobName,
+        ILambdaContext context,
+        CancellationToken ct)
+    {
+        try
+        {
+            var containerClient = new BlobContainerClient(connectionString, container);
+            var blobClient = containerClient.GetBlobClient(blobName);
+
+            if (!await blobClient.ExistsAsync(ct))
+            {
+                context.Logger.LogWarning($"Blob not found: {container}/{blobName}");
+                return null;
+            }
+
+            var ms = new MemoryStream();
+            await blobClient.DownloadToAsync(ms, cancellationToken: ct);
+            ms.Position = 0;
+            context.Logger.LogInformation($"Downloaded {container}/{blobName} Length={ms.Length}");
+            return ms;
+        }
+        catch (Exception ex)
+        {
+            context.Logger.LogError($"DownloadBlobToStreamAsync error: {ex.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Uses Azure Key Vault (client credentials) to retrieve encryption secret.
+    /// Supports either "base64Key[:base64IV]" or JSON { "key":"...", "iv":"..." } formats.
+    /// </summary>
+    private async Task<(byte[]? key, byte[]? iv)> ResolveEncryptionKeyAndIvAsync(
+        AzureKeyVaultConfig kvCfg,
+        string secretName,
+        ILambdaContext ctx,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(kvCfg.ClientId) ||
+            string.IsNullOrWhiteSpace(kvCfg.ClientSecret) ||
+            string.IsNullOrWhiteSpace(kvCfg.TenantID) ||
+            string.IsNullOrWhiteSpace(kvCfg.KeyVaultURI))
+        {
+            ctx.Logger.LogError("ResolveEncryptionKeyAndIvAsync: Incomplete Key Vault configuration.");
+            return (null, null);
+        }
+
+        try
+        {
+            var credential = new ClientSecretCredential(kvCfg.TenantID, Aes256CbcEncrypter.Decrypt(kvCfg.ClientId), Aes256CbcEncrypter.Decrypt(kvCfg.ClientSecret));
+            var secretClient = new SecretClient(new Uri(kvCfg.KeyVaultURI.Replace("{0}", secretName, StringComparison.OrdinalIgnoreCase)), credential);
+
+            KeyVaultSecret secret = await secretClient.GetSecretAsync(secretName, cancellationToken: ct);
+            var raw = secret.Value?.Trim();
+            if (string.IsNullOrWhiteSpace(raw))
+            {
+                ctx.Logger.LogError("ResolveEncryptionKeyAndIvAsync: Secret value empty.");
+                return (null, null);
+            }
+
+            // Try JSON first
+            if (raw.StartsWith("{"))
+            {
+                try
+                {
+                    using var doc = JsonDocument.Parse(raw);
+                    var root = doc.RootElement;
+                    var keyStr = root.TryGetProperty("key", out var k) ? k.GetString() : null;
+                    var ivStr = root.TryGetProperty("iv", out var i) ? i.GetString() : null;
+                    var keyBytes = string.IsNullOrWhiteSpace(keyStr) ? null : Convert.FromBase64String(keyStr);
+                    var ivBytes = string.IsNullOrWhiteSpace(ivStr) ? new byte[16] : Convert.FromBase64String(ivStr);
+                    return (keyBytes, ivBytes);
+                }
+                catch (Exception jx)
+                {
+                    ctx.Logger.LogWarning($"ResolveEncryptionKeyAndIvAsync: JSON parse fallback -> {jx.Message}");
+                }
+            }
+
+            // Non-JSON: "base64Key[:base64IV]"
+            var parts = raw.Split(':', 2, StringSplitOptions.TrimEntries);
+            byte[] key = Convert.FromBase64String(parts[0]);
+            byte[] iv = parts.Length > 1 ? Convert.FromBase64String(parts[1]) : new byte[16]; // zero IV fallback (adjust if policy forbids)
+            return (key, iv);
+        }
+        catch (Exception ex)
+        {
+            ctx.Logger.LogError($"ResolveEncryptionKeyAndIvAsync error: {ex.Message}");
+            return (null, null);
+        }
+    }
+
+    /// <summary>
+    /// Decrypts an AES-256-CBC encrypted file into another file using provided key/iv.
+    /// </summary>
+    private async Task DecryptFileAesCbcAsync(
+        string encryptedPath,
+        string outputPath,
+        byte[] key,
+        byte[]? iv,
+        ILambdaContext ctx,
+        CancellationToken ct)
+    {
+        if (iv == null || iv.Length == 0)
+            iv = new byte[16]; // default if not supplied (requires that encryption used a zero IV)
+
+        await using var inFs = File.OpenRead(encryptedPath);
+        await using var outFs = File.Create(outputPath);
+
+        using var aes = System.Security.Cryptography.Aes.Create();
+        aes.Key = key;
+        aes.IV = iv;
+        aes.Mode = CipherMode.CBC;
+        aes.Padding = PaddingMode.PKCS7;
+
+        using var crypto = aes.CreateDecryptor();
+        using var cryptoStream = new CryptoStream(inFs, crypto, CryptoStreamMode.Read);
+
+        await cryptoStream.CopyToAsync(outFs, ct);
+        await outFs.FlushAsync(ct);
+
+        ctx.Logger.LogInformation($"DecryptFileAesCbcAsync: Decryption completed -> {outputPath}");
     }
 }
