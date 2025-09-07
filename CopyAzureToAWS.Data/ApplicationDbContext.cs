@@ -22,6 +22,7 @@ public class ApplicationDbContext : DbContext
         {
             entity.HasKey(e => e.CallDetailID);
             entity.Property(e => e.CallDetailID);
+            entity.Property(e => e.CallDate);
             entity.Property(e => e.AudioFile).IsRequired().HasMaxLength(255);
             entity.Property(e => e.Status).HasMaxLength(50);
 

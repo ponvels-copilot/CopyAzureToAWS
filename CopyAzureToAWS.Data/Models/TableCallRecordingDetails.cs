@@ -28,4 +28,28 @@ public class TableCallRecordingDetails
 
     [Column("videofilelocation")]
     public string? VideoFileLocation { get; set; }
+
+    [Column("audiofilesize")]
+    public long? AudioFileSize { get; set; }
+
+    [Column("videofilesize")]
+    public long? VideoFileSize { get; set; }
+
+    [Column("audiofilemd5hash")]
+    public string? AudioFileMd5Hash { get; set; }
+
+    [Column("videofilemd5hash")]
+    public string? VideoFileMd5Hash { get; set; }
+    [Column("audiostorageid")]
+    public int? AudioStorageID { get; set; }
+    [Column("videostorageid")]
+    public int? VideoStorageID { get; set; }
+    [Column("isencryptedaudio")]
+    public string? IsEncryptedAudio { get; set; }
+    [Column("isencryptedvideo")]
+    public string? IsEncryptedVideo { get; set; }
+    [Column("updatedby")]
+    public string? UpdatedBy { get; set; }
+    [Column("updateddt")]
+    public DateTime? UpdatedDate { get; set; }
 }

@@ -3,32 +3,21 @@ using Amazon.DynamoDBv2;
 using Amazon.DynamoDBv2.Model;
 using Amazon.Lambda.Core;
 using Amazon.Lambda.SQSEvents;
-using Amazon.Runtime.Internal.Endpoints.StandardLibrary;
 using Amazon.S3;
 using Amazon.S3.Model; // ADD this near other using directives
 using Amazon.SecretsManager;
 using Amazon.SecretsManager.Model;
 using Amazon.SQS;
 using Amazon.XRay.Recorder.Handlers.AwsSdk;
-using Azure;
-using Azure.Identity;
-using Azure.Security.KeyVault.Secrets;
-using Azure.Storage;
-using Azure.Storage.Blobs;
-using Azure.Storage.Blobs.Models;
-using Azure.Storage.Blobs.Specialized;
 using CopyAzureToAWS.Common.Utilities;
 using CopyAzureToAWS.Data;
 using CopyAzureToAWS.Data.DTOs;
 using CopyAzureToAWS.Data.Models;
 using Microsoft.EntityFrameworkCore;
 using Newtonsoft.Json;
-using Npgsql.EntityFrameworkCore.PostgreSQL; // Add this using directive at the top of the file
 using System.Collections.Concurrent;
-using System.IO;
 using System.Reflection;
 using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
 
 //[assembly: LambdaSerializer(typeof(Amazon.Lambda.Serialization.SystemTextJson.DefaultLambdaJsonSerializer))]
@@ -171,7 +160,6 @@ public class Function
         {
             context.Logger.LogInformation($"Processing message: {message.MessageId}");
 
-            // Parse the SQS message
             var sqsMessage = JsonConvert.DeserializeObject<SqsMessage>(message.Body);
             if (sqsMessage == null)
             {
@@ -179,12 +167,10 @@ public class Function
                 return;
             }
 
-            // ADDED: Load secrets once (cached)
             await EnsureSecretConnectionsLoadedAsync();
 
             var country = string.IsNullOrWhiteSpace(sqsMessage.CountryCode) ? "US" : sqsMessage.CountryCode.Trim().ToUpperInvariant();
 
-            // ADDED: Resolve from cache first (Reader role here)
             var connectionString = ResolveConnectionString(country, writer: false);
             if (string.IsNullOrEmpty(connectionString))
             {
@@ -197,7 +183,6 @@ public class Function
 
             using var dbContext = new ApplicationDbContext(optionsBuilder.Options);
 
-            // FIX: Use AudioFileName (property in SqsMessage) instead of AudioFile
             var callDetailsInfo = await GetCallDetailsInfoAsync(
                 dbContext,
                 sqsMessage.CallDetailID,
@@ -268,14 +253,49 @@ public class Function
             FileVault fileVault = new(storageConfig);
             Stream stream = await fileVault.DownloadDecryptedStreamAsync(callDetailsInfo.AudioFileLocation, callDetailsInfo.AudioFile, 60);
 
-            await UploadToS3AndVerifyAsync(
+            var (Success, Bucket, Key, newaudiofilelocation, AzureMd5, S3Md5, S3SizeBytes, Error) = await UploadToS3AndVerifyAsync(
                 stream,
                 sqsMessage.CountryCode!,
                 callDetailsInfo.AudioFile!,
-                kmsArn,
-                clientcode,
-                systemname,
+                kmsArn ?? string.Empty,
+                clientcode ?? "default",
+                systemname ?? RegionEndpoint.USEast1.SystemName,
+                callDetailsInfo.CallDate,
                 context);
+
+            if (Success)
+            {
+                context.Logger.LogInformation($"Upload succeeded. S3 Key={Key} Size={S3SizeBytes} MD5={S3Md5}");
+
+                connectionString = ResolveConnectionString(country, writer: true);
+                if (string.IsNullOrEmpty(connectionString))
+                {
+                    context.Logger.LogError("Database connection string not configured");
+                    return;
+                }
+
+                optionsBuilder = new DbContextOptionsBuilder<ApplicationDbContext>();
+                optionsBuilder.UseNpgsql(connectionString);
+
+                using var dbContextWriter = new ApplicationDbContext(optionsBuilder.Options);
+
+                // Update call_recording_details with new S3 key (location), MD5 and size
+                var updated = await UpdateRecordingDetailsAsync(
+                    dbContextWriter,
+                    callDetailsInfo.CallDetailID,
+                    callDetailsInfo.AudioFile!,
+                    newaudiofilelocation,
+                    S3Md5,
+                    S3SizeBytes,
+                    context);
+
+                if (!updated)
+                    context.Logger.LogWarning($"Recording details update failed for CallDetailID={callDetailsInfo.CallDetailID}");
+            }
+            else
+            {
+                context.Logger.LogError($"Upload failed. Error={Error}");
+            }
         }
         catch (Exception ex)
         {
@@ -284,11 +304,59 @@ public class Function
     }
 
     /// <summary>
+    /// Updates AudioFileLocation, AudioFileMd5Hash, AudioFileSize for the matching audio record (case-insensitive filename).
+    /// Returns true if row updated.
+    /// </summary>
+    private static async Task<bool> UpdateRecordingDetailsAsync(
+        ApplicationDbContext db,
+        long callDetailId,
+        string audioFileName,
+        string newLocation,
+        string md5,
+        long sizeBytes,
+        ILambdaContext ctx,
+        CancellationToken ct = default)
+    {
+        try
+        {
+            var record = await db.TableCallRecordingDetails
+                .FirstOrDefaultAsync(r =>
+                        r.CallDetailID == callDetailId &&
+                        r.AudioFile != null &&
+                        r.AudioFile.ToLower() == audioFileName.ToLower() &&
+                        r.IsAzureCloudAudio == true,
+                    ct);
+
+            if (record == null)
+            {
+                ctx.Logger.LogWarning($"UpdateRecordingDetailsAsync: Record not found CallDetailID={callDetailId} AudioFile={audioFileName}");
+                return false;
+            }
+
+            record.AudioFileLocation = newLocation;
+            record.AudioFileMd5Hash = md5;
+            record.AudioFileSize = sizeBytes;
+            record.AudioStorageID = null; // Reset to default storage
+            record.IsEncryptedAudio = null;
+            record.IsAzureCloudAudio = false; // Mark as no longer Azure
+
+            await db.SaveChangesAsync(ct);
+            ctx.Logger.LogInformation($"UpdateRecordingDetailsAsync: Updated CallDetailID={callDetailId} File={audioFileName} Size={sizeBytes} MD5={md5}");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            ctx.Logger.LogError($"UpdateRecordingDetailsAsync error CallDetailID={callDetailId}: {ex.Message}");
+            return false;
+        }
+    }
+
+    /// <summary>
     /// Returns the default active Azure storage record:
     /// storagetype = 'azure' AND defaultstorage = true AND activeind = true.
     /// If multiple rows exist, prefers most recently updated.
     /// </summary>
-    private async Task<TableStorage?> GetDefaultAzureStorageAsync(
+    private static async Task<TableStorage?> GetDefaultAzureStorageAsync(
         ApplicationDbContext db,
         int? countryId = null,
         CancellationToken ct = default)
@@ -312,7 +380,7 @@ public class Function
     /// <summary>
     /// Deserialize the JSON column of the storage row into strongly typed StorageConfig.
     /// </summary>
-    private StorageAZURE? ParseStorageConfig(TableStorage storage, ILambdaContext ctx)
+    private static StorageAZURE? ParseStorageConfig(TableStorage storage, ILambdaContext ctx)
     {
         if (string.IsNullOrWhiteSpace(storage.Json))
             return null;
@@ -338,7 +406,7 @@ public class Function
     /// ProgramCode, AudioFile, AudioFileLocation, IsAzureCloudAudio.
     /// Optional audioFile filter (case-insensitive) if provided.
     /// </summary>
-    private async Task<CallDetailStorageInfo?> GetCallDetailsInfoAsync(
+    private static async Task<CallDetailInfo?> GetCallDetailsInfoAsync(
         ApplicationDbContext db,
         long callDetailId,
         string? audioFileName,
@@ -354,8 +422,9 @@ public class Function
                 join cr in db.TableCallRecordingDetails.AsNoTracking()
                     on cd.CallDetailID equals cr.CallDetailID
                 where cd.CallDetailID == callDetailId
-                select new CallDetailStorageInfo
+                select new CallDetailInfo
                 {
+                    CallDate = cd.CallDate,
                     CallDetailID = cd.CallDetailID,
                     ProgramCode = cd.ProgramCode,
                     AudioFile = cr.AudioFile,
@@ -455,7 +524,7 @@ public class Function
     }
 
     // ADDED: Resolve connection from cache (country + role)
-    private string? ResolveConnectionString(string country, bool writer)
+    private static string? ResolveConnectionString(string country, bool writer)
     {
         var c = string.IsNullOrWhiteSpace(country) ? "US" : country.Trim().ToUpperInvariant();
         var role = writer ? "Writer" : "Reader";
@@ -577,6 +646,7 @@ public class Function
     private async Task<(bool Success,
                         string? Bucket,
                         string? Key,
+                        string newaudiofilelocation,
                         string AzureMd5,
                         string S3Md5,
                         long S3SizeBytes,
@@ -587,14 +657,15 @@ public class Function
         string kmsArn,
         string clientcode,
         string systemname,
+        DateTime? CallDate,
         ILambdaContext ctx,
         CancellationToken ct = default)
     {
         if (_s3Client == null)
-            return (false, null, null, "", "", 0, "S3 client not initialized");
+            return (false, null, null, string.Empty, string.Empty,string.Empty, 0, "S3 client not initialized");
 
         if (azureStream == null || !azureStream.CanRead)
-            return (false, null, null, "", "", 0, "Azure stream invalid");
+            return (false, null, null, string.Empty, string.Empty, string.Empty, 0, "Azure stream invalid");
 
         var bucket = countryCode?.ToUpperInvariant() switch
         {
@@ -603,15 +674,18 @@ public class Function
         };
 
         if (string.IsNullOrWhiteSpace(bucket))
-            return (false, null, null, "", "", 0, "Resolved bucket name empty (check env USS3BucketName / CAS3BucketName)");
+            return (false, bucket, null, string.Empty, string.Empty, string.Empty, 0, "Resolved bucket name empty (check env USS3BucketName / CAS3BucketName)");
 
-        //callrecordings/CRE/2025/07/09/02/52/US_20231220192818_63399352_2094052445_SAPE.MANGKUNG.mp3
-        //frame the key with prefix if provided
-        DateTime dateTime = DateTime.UtcNow;
-        var key = $"callrecordings/{clientcode}/{dateTime.Year:0000}/{dateTime.Month:00}/{dateTime.Day:00}/{dateTime.Hour:00}/{dateTime.Minute:00}/{fileName}";
+        // Replace the problematic line in UploadToS3AndVerifyAsync with the following:
+
+        //how the key will get generated for date 2025/07/01 01:01:55
+
+        DateTime dateTime = CallDate ?? DateTime.UtcNow;
+        var key = $"callrecordings/{clientcode}/{dateTime:yyyy}/{dateTime:MM}/{dateTime:dd}/{dateTime:HH}/{dateTime:mm}/{fileName}";
+        var newaudiofilelocation = $"{bucket}/callrecordings/{clientcode}/{dateTime:yyyy}/{dateTime:MM}/{dateTime:dd}/{dateTime:HH}/{dateTime:mm}";
 
         if (string.IsNullOrWhiteSpace(key))
-            return (false, bucket, null, "", "", 0, "Key empty");
+            return (false, bucket, null, newaudiofilelocation, string.Empty, string.Empty, 0, "Key empty");
 
         // ----- FIX: Ensure stream positioned at start, compute MD5 safely (base64 for S3, hex for logging) -----
         var (azureMd5Hex, azureMd5Base64) = ComputeContentMd5ForPut(azureStream);
@@ -639,7 +713,7 @@ public class Function
             var putResp = await GetS3Client(systemname).PutObjectAsync(putReq, ct);
             if (putResp.HttpStatusCode != System.Net.HttpStatusCode.OK)
             {
-                return (false, bucket, key, azureMd5Hex, "", 0, $"PutObject non-OK: {putResp.HttpStatusCode}");
+                return (false, bucket, key, newaudiofilelocation, azureMd5Hex, "", 0, $"PutObject non-OK: {putResp.HttpStatusCode}");
             }
 
             // Single-part uploads: ETag (quotes removed) usually equals hex MD5. Still do full read-verify.
@@ -659,15 +733,15 @@ public class Function
             if (!match)
             {
                 ctx.Logger.LogError($"MD5 mismatch Azure={azureMd5Hex} S3={s3Md5Hex} Bucket={bucket} Key={key}");
-                return (false, bucket, key, azureMd5Hex, s3Md5Hex, s3Size, "MD5 mismatch");
+                return (false, bucket, key, newaudiofilelocation, azureMd5Hex, s3Md5Hex, s3Size, "MD5 mismatch");
             }
 
             ctx.Logger.LogInformation($"Upload verified MD5={azureMd5Hex} Size={s3Size} Bucket={bucket} Key={key}");
-            return (true, bucket, key, azureMd5Hex, s3Md5Hex, s3Size, null);
+            return (true, bucket, key, newaudiofilelocation, azureMd5Hex, s3Md5Hex, s3Size, null);
         }
         catch (Exception ex)
         {
-            return (false, bucket, key, azureMd5Hex, "", 0, ex.Message);
+            return (false, bucket, key, newaudiofilelocation, azureMd5Hex, "", 0, ex.Message);
         }
         finally
         {

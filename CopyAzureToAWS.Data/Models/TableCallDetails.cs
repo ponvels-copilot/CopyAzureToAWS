@@ -11,6 +11,9 @@ public class TableCallDetails
     [Column("calldetailid")]
     public long CallDetailID { get; set; }
 
+    [Column("calldate")]
+    public DateTime CallDate { get; set; }
+
     [Column("programcode")]
     public string? ProgramCode { get; set; }
 }

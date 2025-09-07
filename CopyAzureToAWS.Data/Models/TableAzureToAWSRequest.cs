@@ -5,6 +5,8 @@ public class TableAzureToAWSRequest
 {
     [Column("calldetailid")]
     public long CallDetailID { get; set; }
+    [Column("calldate")]
+    public DateTime? CallDate { get; set; }
 
     [Column("audiofile")]
     public string AudioFile { get; set; } = string.Empty;
