@@ -460,9 +460,10 @@ Resources:
       Environment:
         Variables:
           SECRET_ID: !Sub copy-azure-to-aws/${Environment}/${SecretName}
-          SOURCE_SYSTEM: "AZURE"
-          TARGET_SYSTEM: "AWS"
-          QUEUE_URL: !Ref CopyAzureToAWSRequestQueue
+          SecretsManagerTimeOutInSeconds: 30
+          TableClientCountryKMSMap: clientcountrykmsmap
+          USS3BucketName: awsuse1dev2stqatch01
+          CAS3BucketName: awscac1dev2stqatch01
       Policies:
         - AWSLambdaBasicExecutionRole
         - AWSLambdaVPCAccessExecutionRole

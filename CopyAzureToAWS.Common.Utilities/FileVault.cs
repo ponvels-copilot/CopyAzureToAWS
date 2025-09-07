@@ -102,13 +102,26 @@ namespace CopyAzureToAWS.Common.Utilities
         {
             TimeSpan timeout = TimeSpan.FromSeconds(MaximumExecutionTimeSec);
 
-            AzureConnection azureConn = new()
-            {
-                ConnectionString = ConnectionString
-            };
-
+            // Attempt to detect client-side encryption metadata.
             WrappedContentKey wrappedContentKey = await GetEncryptionKeyId(containerName, blobName);
 
+            // If no encryption metadata present, perform a plain (non‑decrypting) download.
+            if (wrappedContentKey == null)
+            {
+                AzureConnection plainConn = new()
+                {
+                    ConnectionString = ConnectionString
+                };
+
+                BlobClient plainBlob = (await GetContainerAsync(plainConn, containerName)).GetBlobClient(blobName);
+
+                await using MemoryStream ms = new();
+                using CancellationTokenSource cts = new(timeout);
+                await plainBlob.DownloadToAsync(ms, cts.Token);
+                return ms.ToArray();
+            }
+
+            // Encrypted path (existing logic retained; now guarded by null check).
             KeyVaultURI = wrappedContentKey.KeyId;
 
             ClientSecretCredential cred = new(TenantID, ClientId, ClientSecret);
@@ -121,23 +134,25 @@ namespace CopyAzureToAWS.Common.Utilities
                 KeyEncryptionKey = cryptoClient,
                 KeyResolver = keyResolver,
                 KeyWrapAlgorithm = "RSA-OAEP"
-
             };
-            azureConn.option = new SpecializedBlobClientOptions() { ClientSideEncryption = encryptionOptions };
 
-            byte[] bytArray = null;
-
-            BlobClient blob = (await GetContainerAsync(azureConn, containerName)).GetBlobClient(blobName);
-
-            await using (MemoryStream getFile = new())
+            AzureConnection encryptedConn = new()
             {
-                using CancellationTokenSource? cts = new(timeout);
-                await blob.DownloadToAsync(getFile, cts.Token);
-                bytArray = getFile.ToArray();
-                getFile.Close();
-            }
+                ConnectionString = ConnectionString,
+                option = new SpecializedBlobClientOptions
+                {
+                    ClientSideEncryption = encryptionOptions
+                }
+            };
 
-            return bytArray;
+            BlobClient encBlob = (await GetContainerAsync(encryptedConn, containerName)).GetBlobClient(blobName);
+
+            await using (MemoryStream encryptedStream = new())
+            {
+                using CancellationTokenSource cts = new(timeout);
+                await encBlob.DownloadToAsync(encryptedStream, cts.Token);
+                return encryptedStream.ToArray();
+            }
         }
 
         public async Task<Stream> GetStreamAsync(string containerName, string blobName, int MaximumExecutionTimeSec)

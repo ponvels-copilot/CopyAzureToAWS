@@ -51,6 +51,13 @@ public class FunctionTest
         };
         IAmazonS3 s3Client = new AmazonS3Client(AWSCredentials, _AmazonS3Config);
 
+        AmazonS3Config _AmazonS3ConfigCA = new()
+        {
+            ServiceURL = "https://s3.console.aws.amazon.com",
+            RegionEndpoint = RegionEndpoint.CACentral1
+        };
+        IAmazonS3 s3ClientCA = new AmazonS3Client(AWSCredentials, _AmazonS3ConfigCA);
+
         AmazonSQSConfig amazonSQSConfig = new()
         {
             ServiceURL = "https://sqs.us-east-1.amazonaws.com"
@@ -72,7 +79,7 @@ public class FunctionTest
         };
         AmazonDynamoDBClient dynamoDBClient = new(AWSCredentials, amazonDynamoDBConfig);
 
-        var function = new Function(s3Client, amazonSQSClient, amazonSecretsManagerClient, dynamoDBClient);
+        var function = new Function(s3Client, s3ClientCA, amazonSQSClient, amazonSecretsManagerClient, dynamoDBClient);
         await function.FunctionHandler(sqsEvent, context);
 
         Assert.Contains("Processed message foobar", logger.Buffer.ToString());
@@ -100,5 +107,9 @@ public class FunctionTest
     {
         Environment.SetEnvironmentVariable("SECRET_ID", "copy-azure-to-aws/dev/azure_to_aws");
         Environment.SetEnvironmentVariable("SecretsManagerTimeOutInSeconds", "10");
+        Environment.SetEnvironmentVariable("TableClientCountryKMSMap", "clientcountrykmsmap");
+        Environment.SetEnvironmentVariable("USS3BucketName", "awsuse1dev2stqatch01");
+        Environment.SetEnvironmentVariable("CAS3BucketName", "awscac1dev2stqatch01");
+
     }
 }

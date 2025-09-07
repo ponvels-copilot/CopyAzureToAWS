@@ -1,8 +1,11 @@
 ﻿using Amazon;
 using Amazon.DynamoDBv2;
+using Amazon.DynamoDBv2.Model;
 using Amazon.Lambda.Core;
 using Amazon.Lambda.SQSEvents;
+using Amazon.Runtime.Internal.Endpoints.StandardLibrary;
 using Amazon.S3;
+using Amazon.S3.Model; // ADD this near other using directives
 using Amazon.SecretsManager;
 using Amazon.SecretsManager.Model;
 using Amazon.SQS;
@@ -34,13 +37,24 @@ namespace CopyAzureToAWS.Lambda;
 
 public class Function
 {
-    private readonly IAmazonS3? _s3Client;
+    private const string Const_arn = "arn";
+    private const string Const_alias = "alias";
+    private const string Const_clientcode = "clientcode";
+    private const string Const_systemname = "systemname";
+
+    private const string Const_programcode = "programcode";
+
+    private IAmazonS3? _s3Client;
+    private IAmazonS3? _s3ClientCanada;
     private readonly AmazonSQSClient? _sqsClient;
     private readonly IAmazonSecretsManager? _secretsManagerClient;
     private readonly AmazonDynamoDBClient? _dynamoDBClient;
 
     private readonly string SecretId = Environment.GetEnvironmentVariable("SECRET_ID").ToString();
     private readonly int SecretsManagerTimeOutInSeconds = int.Parse(Environment.GetEnvironmentVariable("SecretsManagerTimeOutInSeconds").ToString());
+    private readonly string TableClientCountryKMSMap = Environment.GetEnvironmentVariable("TableClientCountryKMSMap");
+    private readonly string USS3BucketName = Environment.GetEnvironmentVariable("USS3BucketName");
+    private readonly string CAS3BucketName = Environment.GetEnvironmentVariable("CAS3BucketName");
 
     private static bool EnableXrayTrace
     {
@@ -87,6 +101,8 @@ public class Function
     private static volatile bool _secretLoaded = false;
     private static readonly object _secretLock = new();
 
+    private static readonly ConcurrentDictionary<string, (string Arn, string Alias, string ClientCode, string SystemName)> _kmsCache = new(StringComparer.OrdinalIgnoreCase);
+
     public Function()
     {
         WriteLog($"{BuildVersion}");
@@ -110,7 +126,6 @@ public class Function
         else
             WriteLog("Intrumenting Lambda with x-ray is not enabled");
 
-
         _s3Client = new AmazonS3Client();
         _sqsClient = new AmazonSQSClient();
         _secretsManagerClient = new AmazonSecretsManagerClient(new AmazonSecretsManagerConfig()
@@ -122,17 +137,18 @@ public class Function
         });
         _dynamoDBClient = new AmazonDynamoDBClient();
 
-        WriteLog("AmazonDynamoDBClient and AmazonSQSClient initialization completed - Function()");
+        WriteLog("IAmazonS3, IAmazonSecretsManager, AmazonSQSClient and AmazonDynamoDBClient initialization completed - Function()");
     }
 
-    public Function(IAmazonS3 _s3Client, AmazonSQSClient _sqsClient, IAmazonSecretsManager _secretsManagerClient, AmazonDynamoDBClient _dynamoDBClient)
+    public Function(IAmazonS3 _s3Client, IAmazonS3 _sqsClientCA, AmazonSQSClient _sqsClient, IAmazonSecretsManager _secretsManagerClient, AmazonDynamoDBClient _dynamoDBClient)
     {
         this._s3Client = _s3Client;
-        this._sqsClient = _sqsClient;
+        this._s3ClientCanada = _sqsClientCA;
         this._secretsManagerClient = _secretsManagerClient;
         this._dynamoDBClient = _dynamoDBClient;
+        this._sqsClient = _sqsClient;
 
-        WriteLog("AmazonDynamoDBClient and AmazonSQSClient initialization completed - Function(parameter)");
+        WriteLog("IAmazonS3, IAmazonSecretsManager, AmazonSQSClient and AmazonDynamoDBClient initialization completed - Function(parameter)");
     }
 
     /// <summary>
@@ -215,37 +231,51 @@ public class Function
             context.Logger.LogInformation(
                 $"Azure Storage Config -> StorageID={azureStorage.StorageID} Endpoint={storageConfig.MSAzureBlob.EndPoint ?? "NULL"} " +
                 $"Bucket(Computed)={azureStorage.BucketName ?? "NULL"}");
-            
-            // TODO: Upload to S3 / checksum / status update
 
-            FileVault fileVault = new(storageConfig);
             //download unencrypted file
+            //FileVault fileVault = new(storageConfig);
             //await fileVault.DownloadBlobAsync(callDetailsInfo.AudioFileLocation, callDetailsInfo.AudioFile, "c:\\temp\test.wav");
             //decrypt the stream before saving to file
 
-            try
-            {
-                string sFilePath = $"D:\\github\\{callDetailsInfo.AudioFile}";
+            //string sFilePath = $"D:\\github\\{callDetailsInfo.AudioFile}";
 
-                #region DownloadByteArrayAsync
-                File.Delete(sFilePath);
-                byte[] byArray = await fileVault.DownloadByteArrayAsync(callDetailsInfo.AudioFileLocation, callDetailsInfo.AudioFile, 60);
-                await File.WriteAllBytesAsync(sFilePath, byArray);
-                #endregion
+            #region DownloadByteArrayAsync
+            //if(System.Diagnostics.Debugger.IsAttached)
+            //{
+            //    File.Delete(sFilePath);
+            //    byte[] byArray = await fileVault.DownloadByteArrayAsync(callDetailsInfo.AudioFileLocation, callDetailsInfo.AudioFile, 60);
+            //    await File.WriteAllBytesAsync(sFilePath, byArray);
+            //}
+            #endregion
 
-                #region DownloadAndDecryptIfNeededAsync
-                File.Delete(sFilePath);
-                Stream stream = await fileVault.DownloadDecryptedStreamAsync(callDetailsInfo.AudioFileLocation, callDetailsInfo.AudioFile, 60);
-                //write the stream to file
-                using var fileStream = File.Create(sFilePath);
-                stream.Position = 0;
-                await stream.CopyToAsync(fileStream);
-                #endregion
-            }
-            catch (Exception ex)
-            {
-                string err = ex.ToString();
-            }
+            #region DownloadAndDecryptIfNeededAsync
+            //if (System.Diagnostics.Debugger.IsAttached)
+            //{
+            //    File.Delete(sFilePath);
+            //    Stream stream = await fileVault.DownloadDecryptedStreamAsync(callDetailsInfo.AudioFileLocation, callDetailsInfo.AudioFile, 60);
+            //    //write the stream to file
+            //    using var fileStream = File.Create(sFilePath);
+            //    stream.Position = 0;
+            //    await stream.CopyToAsync(fileStream);
+            //}
+            #endregion
+
+            //Get customer managed encryption id from dynamodb based on the programcode 
+            var (kmsArn, kmsAlias, clientcode, systemname) = await GetKmsKeyForProgramAsync(
+                    callDetailsInfo.ProgramCode,
+                    context);
+
+            FileVault fileVault = new(storageConfig);
+            Stream stream = await fileVault.DownloadDecryptedStreamAsync(callDetailsInfo.AudioFileLocation, callDetailsInfo.AudioFile, 60);
+
+            await UploadToS3AndVerifyAsync(
+                stream,
+                sqsMessage.CountryCode!,
+                callDetailsInfo.AudioFile!,
+                kmsArn,
+                clientcode,
+                systemname,
+                context);
         }
         catch (Exception ex)
         {
@@ -400,7 +430,7 @@ public class Function
 
             Console.WriteLine($"Secret '{secretId}' loaded with {_connCache.Count} connection entries.");
         }
-        catch (ResourceNotFoundException e)
+        catch (Amazon.SecretsManager.Model.ResourceNotFoundException e)
         {
             Console.WriteLine($"Secret '{secretId}' not found.", e);
         }
@@ -459,17 +489,251 @@ public class Function
 
         Console.WriteLine(sJsonMsg);
     }
-}
 
-public class AzureConnection
-{
-    public string ConnectionString { get; set; } = string.Empty;
-    public BlobClientOptions option { get; set; } = new BlobClientOptions();
-}
+    /// <summary>
+    /// Query DynamoDB (TableClientCountryKMSMap) for KMS mapping by ProgramCode (partition key).
+    /// If CountryCode is also stored (non-key) it is applied as a FilterExpression.
+    /// Caches results in-memory for the lifetime of the Lambda container.
+    /// Expected item attributes: ProgramCode (PK), KmsKeyArn, KmsAlias, CountryCode (optional).
+    /// </summary>
+    private async Task<(string? Arn, string? Alias, string? ClientCode, string? SystemName)> GetKmsKeyForProgramAsync(
+        string? programCode,
+        ILambdaContext ctx,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(programCode))
+            return (null, null, null, null);
 
-public class WrappedContentKey
-{
-    public string KeyId { get; set; } = string.Empty;
-    public string EncryptedKey { get; set; } = string.Empty;
-    public string Algorithm { get; set; } = string.Empty;
+        if (string.IsNullOrWhiteSpace(TableClientCountryKMSMap))
+        {
+            ctx.Logger.LogError("DynamoDB table name (TableClientCountryKMSMap) not configured in environment variables.");
+            return (null, null, null, null);
+        }
+
+        if (_dynamoDBClient == null)
+        {
+            ctx.Logger.LogError("DynamoDB client not initialized.");
+            return (null, null, null, null);
+        }
+
+        var cacheKey = programCode;
+        if (_kmsCache.TryGetValue(cacheKey, out var cached))
+            return (cached.Arn, cached.Alias, cached.ClientCode, cached.SystemName);
+
+        try
+        {
+            // Build QueryRequest (ProgramCode is the partition key)
+            var queryReq = new QueryRequest
+            {
+                TableName = TableClientCountryKMSMap,
+                KeyConditionExpression = $"{Const_programcode} = :pc",
+                ExpressionAttributeValues = new Dictionary<string, AttributeValue>
+                {
+                    [":pc"] = new AttributeValue { S = programCode }
+                },
+                Limit = 5,                 // defensive (expecting 1 normally)
+                ConsistentRead = false
+            };
+
+            var queryResp = await _dynamoDBClient.QueryAsync(queryReq, ct);
+            var item = queryResp.Items.FirstOrDefault();
+            if (item == null)
+                return (null, null, null, null);
+
+            item.TryGetValue(Const_arn, out var avArn);
+            item.TryGetValue(Const_alias, out var avAlias);
+            item.TryGetValue(Const_clientcode, out var avClientCode);
+            item.TryGetValue(Const_systemname, out var avSystemName);
+
+            var arn = avArn?.S;
+            var alias = avAlias?.S;
+            var clientCode = avClientCode?.S;
+            var systemName = avSystemName?.S;
+
+            if (!string.IsNullOrWhiteSpace(arn))
+            {
+                //cache arn, alias and clientcode
+                _kmsCache[cacheKey] = (arn!, alias!, clientCode!, systemName!);
+                return (arn, alias, clientCode, systemName);
+            }
+        }
+        catch (Exception ex)
+        {
+            ctx.Logger.LogError($"GetKmsKeyForProgramAsync Query failed ProgramCode={programCode}: {ex.Message}");
+        }
+
+        return (null, null, null, null);
+    }
+
+    /// <summary>
+    /// Uploads an Azure audio stream to S3 using the country-specific bucket and optional KMS CMK,
+    /// validates MD5 integrity by re-downloading the object, and returns sizes/checksums.
+    /// </summary>
+    /// <param name="azureStream">Stream already downloaded from Azure (position will be reset).</param>
+    /// <param name="countryCode">Country code (US / CA) to pick the bucket.</param>
+    /// <param name="fileName">Target file name (key tail). Will be combined with optional prefix.</param>
+    /// <param name="kmsArn">KMS Key ARN for server-side encryption.</param>
+    /// <param name="clientcode">clientcode is used to frame the key</param>
+    private async Task<(bool Success,
+                        string? Bucket,
+                        string? Key,
+                        string AzureMd5,
+                        string S3Md5,
+                        long S3SizeBytes,
+                        string? Error)> UploadToS3AndVerifyAsync(
+        Stream azureStream,
+        string countryCode,
+        string fileName,
+        string kmsArn,
+        string clientcode,
+        string systemname,
+        ILambdaContext ctx,
+        CancellationToken ct = default)
+    {
+        if (_s3Client == null)
+            return (false, null, null, "", "", 0, "S3 client not initialized");
+
+        if (azureStream == null || !azureStream.CanRead)
+            return (false, null, null, "", "", 0, "Azure stream invalid");
+
+        var bucket = countryCode?.ToUpperInvariant() switch
+        {
+            "CA" => CAS3BucketName,
+            _ => USS3BucketName // default US
+        };
+
+        if (string.IsNullOrWhiteSpace(bucket))
+            return (false, null, null, "", "", 0, "Resolved bucket name empty (check env USS3BucketName / CAS3BucketName)");
+
+        //callrecordings/CRE/2025/07/09/02/52/US_20231220192818_63399352_2094052445_SAPE.MANGKUNG.mp3
+        //frame the key with prefix if provided
+        DateTime dateTime = DateTime.UtcNow;
+        var key = $"callrecordings/{clientcode}/{dateTime.Year:0000}/{dateTime.Month:00}/{dateTime.Day:00}/{dateTime.Hour:00}/{dateTime.Minute:00}/{fileName}";
+
+        if (string.IsNullOrWhiteSpace(key))
+            return (false, bucket, null, "", "", 0, "Key empty");
+
+        // ----- FIX: Ensure stream positioned at start, compute MD5 safely (base64 for S3, hex for logging) -----
+        var (azureMd5Hex, azureMd5Base64) = ComputeContentMd5ForPut(azureStream);
+
+        try
+        {
+            // Reset again to guarantee PutObject reads full content
+            if (azureStream.CanSeek) azureStream.Position = 0;
+
+            var putReq = new PutObjectRequest
+            {
+                BucketName = bucket,
+                Key = key,
+                InputStream = azureStream,
+                AutoCloseStream = false,
+                ContentType = "audio/wav",
+                MD5Digest = azureMd5Base64,
+                StorageClass = S3StorageClass.IntelligentTiering,
+                ServerSideEncryptionMethod = ServerSideEncryptionMethod.AWSKMS,
+                ServerSideEncryptionKeyManagementServiceKeyId = kmsArn,
+            };
+
+            ctx.Logger.LogInformation($"Uploading to S3 Bucket={bucket} Key={key} KMS={(string.IsNullOrEmpty(kmsArn) ? "None" : kmsArn)} MD5={azureMd5Hex}");
+
+            var putResp = await GetS3Client(systemname).PutObjectAsync(putReq, ct);
+            if (putResp.HttpStatusCode != System.Net.HttpStatusCode.OK)
+            {
+                return (false, bucket, key, azureMd5Hex, "", 0, $"PutObject non-OK: {putResp.HttpStatusCode}");
+            }
+
+            // Single-part uploads: ETag (quotes removed) usually equals hex MD5. Still do full read-verify.
+            using var getResp = await GetS3Client(systemname).GetObjectAsync(new GetObjectRequest
+            {
+                BucketName = bucket,
+                Key = key
+            }, ct);
+
+            await using var s3Mem = new MemoryStream();
+            await getResp.ResponseStream.CopyToAsync(s3Mem, ct);
+            s3Mem.Position = 0;
+            var s3Md5Hex = CalculateMD5(s3Mem);
+            var s3Size = getResp.ContentLength;
+
+            var match = string.Equals(azureMd5Hex, s3Md5Hex, StringComparison.OrdinalIgnoreCase);
+            if (!match)
+            {
+                ctx.Logger.LogError($"MD5 mismatch Azure={azureMd5Hex} S3={s3Md5Hex} Bucket={bucket} Key={key}");
+                return (false, bucket, key, azureMd5Hex, s3Md5Hex, s3Size, "MD5 mismatch");
+            }
+
+            ctx.Logger.LogInformation($"Upload verified MD5={azureMd5Hex} Size={s3Size} Bucket={bucket} Key={key}");
+            return (true, bucket, key, azureMd5Hex, s3Md5Hex, s3Size, null);
+        }
+        catch (Exception ex)
+        {
+            return (false, bucket, key, azureMd5Hex, "", 0, ex.Message);
+        }
+        finally
+        {
+            if (azureStream.CanSeek)
+                azureStream.Position = 0;
+        }
+    }
+
+    /// <summary>
+    /// Computes MD5 for a stream for S3 PutObject (returns hex + base64). 
+    /// If stream is non-seekable, it is buffered into memory once.
+    /// Stream position restored to 0 after computation if seekable.
+    /// </summary>
+    private static (string Hex, string Base64) ComputeContentMd5ForPut(Stream stream)
+    {
+        if (!stream.CanSeek)
+        {
+            // Buffer non-seekable stream
+            using var md5 = MD5.Create();
+            using var mem = new MemoryStream();
+            stream.CopyTo(mem);
+            var data = mem.ToArray();
+            var hash = md5.ComputeHash(data);
+            stream.Dispose(); // original non-seekable consumed
+            var hex = Convert.ToHexString(hash).ToLowerInvariant();
+            var b64 = Convert.ToBase64String(hash);
+            // Replace stream with new memory stream if caller continues to use it (optional)
+            // (Callers should supply seekable stream ideally.)
+            return (hex, b64);
+        }
+
+        var originalPos = stream.Position;
+        stream.Position = 0;
+        using (var md5Seek = MD5.Create())
+        {
+            var hash = md5Seek.ComputeHash(stream);
+            var hex = Convert.ToHexString(hash).ToLowerInvariant();
+            var b64 = Convert.ToBase64String(hash);
+            stream.Position = originalPos; // caller expects original position (we reset to 0 later before upload)
+            return (hex, b64);
+        }
+    }
+
+    /// <summary>
+    /// This function will return existing S3 client if the region is same as requested, otherwise it will create new S3 client for requested region
+    /// as this lambda running under us-east-1, s3 client created in us-east-1 region by default.
+    /// </summary>
+    /// <param name="sSystemName"></param>
+    /// <returns></returns>
+    private IAmazonS3 GetS3Client(string sSystemName)
+    {
+        if (_s3Client.Config.RegionEndpoint.Equals(RegionEndpoint.GetBySystemName(sSystemName)))
+        {
+            WriteLog($"S3 client already created with region : {_s3Client.Config.RegionEndpoint.SystemName}. Instantiation skipped.");
+            return _s3Client;
+        }
+
+        if (_s3ClientCanada == null)
+        {
+            _s3ClientCanada = new AmazonS3Client(new AmazonS3Config()
+            {
+                RegionEndpoint = RegionEndpoint.GetBySystemName(sSystemName)
+            });
+            WriteLog($"S3 client created with region : {_s3ClientCanada.Config.RegionEndpoint.SystemName}. Instantiation completed.");
+        }
+
+        return _s3ClientCanada;
+    }
 }
