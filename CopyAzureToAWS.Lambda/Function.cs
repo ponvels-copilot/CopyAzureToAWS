@@ -17,6 +17,7 @@ using Amazon.DynamoDBv2;
 using Amazon.XRay.Recorder.Handlers.AwsSdk;
 using Amazon.SecretsManager.Model;
 using System.Collections.Concurrent;
+using CopyAzureToAWS.Common.Utilities;
 
 [assembly: LambdaSerializer(typeof(Amazon.Lambda.Serialization.SystemTextJson.DefaultLambdaJsonSerializer))]
 
@@ -207,6 +208,11 @@ public class Function
             context.Logger.LogInformation(
                 $"Azure Storage Config -> StorageID={azureStorage.StorageID} Endpoint={storageConfig.MSAzureBlob.EndPoint ?? "NULL"} " +
                 $"Bucket(Computed)={azureStorage.BucketName ?? "NULL"}");
+
+            string accountname = Aes256CbcEncrypter.Decrypt(storageConfig.MSAzureBlob.AccountName);
+            string AccountKey = Aes256CbcEncrypter.Decrypt(storageConfig.MSAzureBlob.AccountKey);
+            string ConnectionString = Aes256CbcEncrypter.Decrypt(storageConfig.MSAzureBlob.ConnectionString);
+
 
             // TODO: use storageInfo + storageConfig to locate and copy the blob.
             // Copy logic would go here...
