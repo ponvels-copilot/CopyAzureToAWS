@@ -26,6 +26,8 @@ namespace CopyAzureToAWS.Lambda;
 
 public class Function
 {
+    private enum StatusCode { INPROGRESS, SUCCESS, ERROR }
+
     private const string Const_arn = "arn";
     private const string Const_alias = "alias";
     private const string Const_clientcode = "clientcode";
@@ -183,15 +185,21 @@ public class Function
 
             using var dbContext = new ApplicationDbContext(optionsBuilder.Options);
 
-            var callDetailsInfo = await GetCallDetailsInfoAsync(
+            var (callDetailsInfo, exception) = await GetCallDetailsInfoAsync(
                 dbContext,
                 sqsMessage.CallDetailID,
                 sqsMessage.AudioFile,
                 context);
 
-            if (callDetailsInfo == null)
+            if (callDetailsInfo == null || exception is not null)
             {
                 context.Logger.LogWarning($"No joined call detail found CallDetailID={sqsMessage.CallDetailID} AudioFile={sqsMessage.AudioFile}");
+
+                await MoveAndFinalizeRequestAsync(
+                    sqsMessage,
+                    exception,
+                    context);
+
                 return;
             }
 
@@ -206,10 +214,16 @@ public class Function
                 return;
             }
 
-            var storageConfig = ParseStorageConfig(azureStorage, context);
-            if (storageConfig?.MSAzureBlob == null)
+            var (storageConfig, exceptionstorage) = ParseStorageConfig(azureStorage, context);
+            if (storageConfig?.MSAzureBlob == null || exceptionstorage is not null)
             {
                 context.Logger.LogError("Failed to parse Azure Blob configuration from storage JSON.");
+
+                await MoveAndFinalizeRequestAsync(
+                    sqsMessage,
+                    exceptionstorage,
+                    context);
+
                 return;
             }
 
@@ -246,15 +260,36 @@ public class Function
             #endregion
 
             //Get customer managed encryption id from dynamodb based on the programcode 
-            var (kmsArn, kmsAlias, clientcode, systemname) = await GetKmsKeyForProgramAsync(
+            var (kmsArn, kmsAlias, clientcode, systemname, exceptionkmskey) = await GetKmsKeyForProgramAsync(
                     callDetailsInfo.ProgramCode,
                     context);
+            if (string.IsNullOrWhiteSpace(kmsArn) || exceptionkmskey is not null)
+            {
+                context.Logger.LogError($"Failed to retrieve KMS key for program: {callDetailsInfo.ProgramCode} from dynamodb table: {TableClientCountryKMSMap}.");
 
-            FileVault fileVault = new(storageConfig);
-            Stream stream = await fileVault.DownloadDecryptedStreamAsync(callDetailsInfo.AudioFileLocation, callDetailsInfo.AudioFile, 60);
+                await MoveAndFinalizeRequestAsync(
+                    sqsMessage,
+                    exceptionkmskey,
+                    context);
 
-            var (Success, Bucket, Key, newaudiofilelocation, AzureMd5, S3Md5, S3SizeBytes, Error) = await UploadToS3AndVerifyAsync(
-                stream,
+                return;
+            }
+
+            var (AzureStream, AzureException) = await GetAzureStreamAsync(callDetailsInfo, storageConfig);
+            if (AzureException != null)
+            {
+                context.Logger.LogError($"Failed to get Azure stream for CallDetailID={callDetailsInfo.CallDetailID} AudioFile={callDetailsInfo.AudioFile}: {AzureException.Message}");
+
+                await MoveAndFinalizeRequestAsync(
+                    sqsMessage,
+                    AzureException,
+                    context);
+
+                return;
+            }
+
+            var (Bucket, Key, newaudiofilelocation, AzureMd5, S3Md5, S3SizeBytes, ExceptionUpload) = await UploadToS3AndVerifyAsync(
+                AzureStream!,
                 sqsMessage.CountryCode!,
                 callDetailsInfo.AudioFile!,
                 kmsArn ?? string.Empty,
@@ -263,14 +298,20 @@ public class Function
                 callDetailsInfo.CallDate,
                 context);
 
-            if (Success)
+            if (ExceptionUpload == null)
             {
                 context.Logger.LogInformation($"Upload succeeded. S3 Key={Key} Size={S3SizeBytes} MD5={S3Md5}");
 
                 connectionString = ResolveConnectionString(country, writer: true);
                 if (string.IsNullOrEmpty(connectionString))
                 {
-                    context.Logger.LogError("Database connection string not configured");
+                    string smsg = $"Database connection string not configured correctly for countrycode:{country} Writer";
+                    context.Logger.LogError(smsg);
+                    await MoveAndFinalizeRequestAsync(
+                    sqsMessage,
+                    new Exception(smsg),
+                    context);
+
                     return;
                 }
 
@@ -280,7 +321,7 @@ public class Function
                 using var dbContextWriter = new ApplicationDbContext(optionsBuilder.Options);
 
                 // Update call_recording_details with new S3 key (location), MD5 and size
-                var updated = await UpdateRecordingDetailsAsync(
+                var (updated, UpdatException) = await UpdateRecordingDetailsAsync(
                     dbContextWriter,
                     callDetailsInfo.CallDetailID,
                     callDetailsInfo.AudioFile!,
@@ -290,11 +331,31 @@ public class Function
                     context);
 
                 if (!updated)
+                {
                     context.Logger.LogWarning($"Recording details update failed for CallDetailID={callDetailsInfo.CallDetailID}");
+                    await MoveAndFinalizeRequestAsync(
+                        sqsMessage,
+                        UpdatException,
+                        context);
+                }
+                else
+                {
+                    await MoveAndFinalizeRequestAsync(
+                        sqsMessage,
+                        null,
+                        context);
+                    context.Logger.LogInformation($"Recording details updated for CallDetailID={callDetailsInfo.CallDetailID}");
+                }
             }
             else
             {
-                context.Logger.LogError($"Upload failed. Error={Error}");
+                context.Logger.LogError($"Azure call upload to AWS is failed for Calldetailid: {sqsMessage.CallDetailID}.");
+                await MoveAndFinalizeRequestAsync(
+                    sqsMessage,
+                    ExceptionUpload,
+                    context);
+
+                return;
             }
         }
         catch (Exception ex)
@@ -303,11 +364,25 @@ public class Function
         }
     }
 
+    private static async Task<(Stream? AzureStream, Exception? AzureException)> GetAzureStreamAsync(CallDetailInfo callDetailsInfo, StorageAZURE storageConfig)
+    {
+        try
+        {
+            FileVault fileVault = new(storageConfig);
+            Stream stream = await fileVault.DownloadDecryptedStreamAsync(callDetailsInfo.AudioFileLocation, callDetailsInfo.AudioFile, 60);
+            return (stream, null);
+        }
+        catch (Exception ex)
+        {
+            return (null, ex);
+        }
+    }
+
     /// <summary>
     /// Updates AudioFileLocation, AudioFileMd5Hash, AudioFileSize for the matching audio record (case-insensitive filename).
     /// Returns true if row updated.
     /// </summary>
-    private static async Task<bool> UpdateRecordingDetailsAsync(
+    private static async Task<(bool, Exception?)> UpdateRecordingDetailsAsync(
         ApplicationDbContext db,
         long callDetailId,
         string audioFileName,
@@ -317,6 +392,7 @@ public class Function
         ILambdaContext ctx,
         CancellationToken ct = default)
     {
+        string smsg = $"UpdateRecordingDetailsAsync: {0}";
         try
         {
             var record = await db.TableCallRecordingDetails
@@ -329,8 +405,9 @@ public class Function
 
             if (record == null)
             {
-                ctx.Logger.LogWarning($"UpdateRecordingDetailsAsync: Record not found CallDetailID={callDetailId} AudioFile={audioFileName}");
-                return false;
+                smsg = string.Format(smsg, $"Record not found CallDetailID={callDetailId} AudioFile={audioFileName}");
+                ctx.Logger.LogWarning(smsg);
+                return (false, new Exception(smsg));
             }
 
             record.AudioFileLocation = newLocation;
@@ -341,13 +418,13 @@ public class Function
             record.IsAzureCloudAudio = false; // Mark as no longer Azure
 
             await db.SaveChangesAsync(ct);
-            ctx.Logger.LogInformation($"UpdateRecordingDetailsAsync: Updated CallDetailID={callDetailId} File={audioFileName} Size={sizeBytes} MD5={md5}");
-            return true;
+            ctx.Logger.LogInformation(string.Format(smsg, $"Updated CallDetailID={callDetailId} File={audioFileName} Size={sizeBytes} MD5={md5}"));
+            return (true, null);
         }
         catch (Exception ex)
         {
-            ctx.Logger.LogError($"UpdateRecordingDetailsAsync error CallDetailID={callDetailId}: {ex.Message}");
-            return false;
+            ctx.Logger.LogError(string.Format(smsg, $"error CallDetailID={callDetailId}: {ex.Message}"));
+            return (false, ex);
         }
     }
 
@@ -380,24 +457,26 @@ public class Function
     /// <summary>
     /// Deserialize the JSON column of the storage row into strongly typed StorageConfig.
     /// </summary>
-    private static StorageAZURE? ParseStorageConfig(TableStorage storage, ILambdaContext ctx)
+    private static (StorageAZURE?, Exception?) ParseStorageConfig(TableStorage storage, ILambdaContext ctx)
     {
         if (string.IsNullOrWhiteSpace(storage.Json))
-            return null;
+            return (null, null);
 
         try
         {
-            return System.Text.Json.JsonSerializer.Deserialize<StorageAZURE>(
+            JsonSerializerOptions jsonSerializerOptions = new()
+            {
+                PropertyNameCaseInsensitive = true
+            };
+            JsonSerializerOptions options = jsonSerializerOptions;
+            return (System.Text.Json.JsonSerializer.Deserialize<StorageAZURE>(
                 storage.Json,
-                new JsonSerializerOptions
-                {
-                    PropertyNameCaseInsensitive = true
-                });
+                options), null);
         }
         catch (Exception ex)
         {
             ctx.Logger.LogError($"ParseStorageConfig failed StorageID={storage.StorageID}: {ex.Message}");
-            return null;
+            return (null, ex);
         }
     }
 
@@ -406,7 +485,7 @@ public class Function
     /// ProgramCode, AudioFile, AudioFileLocation, IsAzureCloudAudio.
     /// Optional audioFile filter (case-insensitive) if provided.
     /// </summary>
-    private static async Task<CallDetailInfo?> GetCallDetailsInfoAsync(
+    private static async Task<(CallDetailInfo?, Exception?)> GetCallDetailsInfoAsync(
         ApplicationDbContext db,
         long callDetailId,
         string? audioFileName,
@@ -443,12 +522,12 @@ public class Function
                 .OrderBy(r => r.AudioFile) // deterministic ordering
                 .FirstOrDefaultAsync(ct);
 
-            return result;
+            return (result, null);
         }
         catch (Exception ex)
         {
-            context.Logger.LogError($"GetCallStorageInfoAsync failed CallDetailID={callDetailId}: {ex.Message}");
-            return null;
+            context.Logger.LogError($"GetCallStorageInfoAsync: failed CallDetailID={callDetailId}: {ex.Message}");
+            return (null, ex);
         }
     }
 
@@ -565,29 +644,35 @@ public class Function
     /// Caches results in-memory for the lifetime of the Lambda container.
     /// Expected item attributes: ProgramCode (PK), KmsKeyArn, KmsAlias, CountryCode (optional).
     /// </summary>
-    private async Task<(string? Arn, string? Alias, string? ClientCode, string? SystemName)> GetKmsKeyForProgramAsync(
+    private async Task<(string? Arn, string? Alias, string? ClientCode, string? SystemName, Exception? exception)> GetKmsKeyForProgramAsync(
         string? programCode,
         ILambdaContext ctx,
         CancellationToken ct = default)
     {
+        string smsg = "GetKmsKeyForProgramAsync: {0}";
         if (string.IsNullOrWhiteSpace(programCode))
-            return (null, null, null, null);
+        {
+            smsg = string.Format(smsg, $"Programcode is empty");
+            return (null, null, null, null, new Exception(smsg));
+        }
 
         if (string.IsNullOrWhiteSpace(TableClientCountryKMSMap))
         {
-            ctx.Logger.LogError("DynamoDB table name (TableClientCountryKMSMap) not configured in environment variables.");
-            return (null, null, null, null);
+            smsg = string.Format(smsg, $"DynamoDB table name (TableClientCountryKMSMap) not configured in environment variables.");
+            ctx.Logger.LogError(smsg);
+            return (null, null, null, null, new Exception(smsg));
         }
 
         if (_dynamoDBClient == null)
         {
-            ctx.Logger.LogError("DynamoDB client not initialized.");
-            return (null, null, null, null);
+            smsg = string.Format(smsg, $"DynamoDB client not initialized.");
+            ctx.Logger.LogError(smsg);
+            return (null, null, null, null, new Exception(smsg));
         }
 
         var cacheKey = programCode;
         if (_kmsCache.TryGetValue(cacheKey, out var cached))
-            return (cached.Arn, cached.Alias, cached.ClientCode, cached.SystemName);
+            return (cached.Arn, cached.Alias, cached.ClientCode, cached.SystemName, null);
 
         try
         {
@@ -607,7 +692,11 @@ public class Function
             var queryResp = await _dynamoDBClient.QueryAsync(queryReq, ct);
             var item = queryResp.Items.FirstOrDefault();
             if (item == null)
-                return (null, null, null, null);
+            {
+                smsg = string.Format(smsg, $"No mapping for programcode: {programCode} found in dynamodb table: {TableClientCountryKMSMap}.");
+                ctx.Logger.LogError(smsg);
+                return (null, null, null, null, new Exception(smsg));
+            }
 
             item.TryGetValue(Const_arn, out var avArn);
             item.TryGetValue(Const_alias, out var avAlias);
@@ -623,15 +712,20 @@ public class Function
             {
                 //cache arn, alias and clientcode
                 _kmsCache[cacheKey] = (arn!, alias!, clientCode!, systemName!);
-                return (arn, alias, clientCode, systemName);
+                return (arn, alias, clientCode, systemName, null);
+            }
+            else
+            {
+                smsg = string.Format(smsg, $"Mapping for programcode: {programCode} missing KmsKeyArn attribute in dynamodb table: {TableClientCountryKMSMap}.");
+                ctx.Logger.LogError(smsg);
+                return (null, null, null, null, new Exception(smsg));
             }
         }
         catch (Exception ex)
         {
-            ctx.Logger.LogError($"GetKmsKeyForProgramAsync Query failed ProgramCode={programCode}: {ex.Message}");
+            ctx.Logger.LogError(string.Format(smsg, $"Query failed ProgramCode={programCode}: {ex.Message}"));
+            return (null, null, null, null, ex);
         }
-
-        return (null, null, null, null);
     }
 
     /// <summary>
@@ -643,14 +737,13 @@ public class Function
     /// <param name="fileName">Target file name (key tail). Will be combined with optional prefix.</param>
     /// <param name="kmsArn">KMS Key ARN for server-side encryption.</param>
     /// <param name="clientcode">clientcode is used to frame the key</param>
-    private async Task<(bool Success,
-                        string? Bucket,
+    private async Task<(string? Bucket,
                         string? Key,
                         string newaudiofilelocation,
                         string AzureMd5,
                         string S3Md5,
                         long S3SizeBytes,
-                        string? Error)> UploadToS3AndVerifyAsync(
+                        Exception? exception)> UploadToS3AndVerifyAsync(
         Stream azureStream,
         string countryCode,
         string fileName,
@@ -661,11 +754,21 @@ public class Function
         ILambdaContext ctx,
         CancellationToken ct = default)
     {
+        string smsg = $"UploadToS3AndVerifyAsync: {0}";
+
         if (_s3Client == null)
-            return (false, null, null, string.Empty, string.Empty,string.Empty, 0, "S3 client not initialized");
+        {
+            smsg = string.Format(smsg, "S3 client not initialized");
+            ctx.Logger.LogError(smsg);
+            return (null, null, string.Empty, string.Empty, string.Empty, 0, new Exception(smsg));
+        }
 
         if (azureStream == null || !azureStream.CanRead)
-            return (false, null, null, string.Empty, string.Empty, string.Empty, 0, "Azure stream invalid");
+        {
+            smsg = string.Format(smsg, "Azure stream invalid");
+            ctx.Logger.LogError(smsg);
+            return (null, null, string.Empty, string.Empty, string.Empty, 0, new Exception(smsg));
+        }
 
         var bucket = countryCode?.ToUpperInvariant() switch
         {
@@ -674,18 +777,22 @@ public class Function
         };
 
         if (string.IsNullOrWhiteSpace(bucket))
-            return (false, bucket, null, string.Empty, string.Empty, string.Empty, 0, "Resolved bucket name empty (check env USS3BucketName / CAS3BucketName)");
-
-        // Replace the problematic line in UploadToS3AndVerifyAsync with the following:
-
-        //how the key will get generated for date 2025/07/01 01:01:55
+        {
+            smsg = string.Format(smsg, "Resolved bucket name empty (check env USS3BucketName / CAS3BucketName)");
+            ctx.Logger.LogError(smsg);
+            return (bucket, null, string.Empty, string.Empty, string.Empty, 0, new Exception(smsg));
+        }
 
         DateTime dateTime = CallDate ?? DateTime.UtcNow;
         var key = $"callrecordings/{clientcode}/{dateTime:yyyy}/{dateTime:MM}/{dateTime:dd}/{dateTime:HH}/{dateTime:mm}/{fileName}";
         var newaudiofilelocation = $"{bucket}/callrecordings/{clientcode}/{dateTime:yyyy}/{dateTime:MM}/{dateTime:dd}/{dateTime:HH}/{dateTime:mm}";
 
         if (string.IsNullOrWhiteSpace(key))
-            return (false, bucket, null, newaudiofilelocation, string.Empty, string.Empty, 0, "Key empty");
+        {
+            smsg = string.Format(smsg, "unable to frame the key (s3 prefix)");
+            ctx.Logger.LogError(smsg);
+            return (bucket, null, newaudiofilelocation, string.Empty, string.Empty, 0, new Exception(smsg));
+        }
 
         // ----- FIX: Ensure stream positioned at start, compute MD5 safely (base64 for S3, hex for logging) -----
         var (azureMd5Hex, azureMd5Base64) = ComputeContentMd5ForPut(azureStream);
@@ -713,7 +820,9 @@ public class Function
             var putResp = await GetS3Client(systemname).PutObjectAsync(putReq, ct);
             if (putResp.HttpStatusCode != System.Net.HttpStatusCode.OK)
             {
-                return (false, bucket, key, newaudiofilelocation, azureMd5Hex, "", 0, $"PutObject non-OK: {putResp.HttpStatusCode}");
+                smsg = string.Format(smsg, $"PutObject non-OK: {putResp.HttpStatusCode}");
+                ctx.Logger.LogError(smsg);
+                return (bucket, key, newaudiofilelocation, azureMd5Hex, "", 0, new Exception(smsg));
             }
 
             // Single-part uploads: ETag (quotes removed) usually equals hex MD5. Still do full read-verify.
@@ -732,16 +841,18 @@ public class Function
             var match = string.Equals(azureMd5Hex, s3Md5Hex, StringComparison.OrdinalIgnoreCase);
             if (!match)
             {
-                ctx.Logger.LogError($"MD5 mismatch Azure={azureMd5Hex} S3={s3Md5Hex} Bucket={bucket} Key={key}");
-                return (false, bucket, key, newaudiofilelocation, azureMd5Hex, s3Md5Hex, s3Size, "MD5 mismatch");
+                smsg = string.Format(smsg, $"MD5 mismatch Azure={azureMd5Hex} S3={s3Md5Hex} Bucket={bucket} Key={key}");
+                ctx.Logger.LogError(smsg);
+                return (bucket, key, newaudiofilelocation, azureMd5Hex, s3Md5Hex, s3Size, new Exception(smsg));
             }
 
             ctx.Logger.LogInformation($"Upload verified MD5={azureMd5Hex} Size={s3Size} Bucket={bucket} Key={key}");
-            return (true, bucket, key, newaudiofilelocation, azureMd5Hex, s3Md5Hex, s3Size, null);
+            return (bucket, key, newaudiofilelocation, azureMd5Hex, s3Md5Hex, s3Size, null);
         }
         catch (Exception ex)
         {
-            return (false, bucket, key, newaudiofilelocation, azureMd5Hex, "", 0, ex.Message);
+            ctx.Logger.LogError(ex.Message);
+            return (bucket, key, newaudiofilelocation, azureMd5Hex, "", 0, ex);
         }
         finally
         {
@@ -793,7 +904,7 @@ public class Function
     /// <returns></returns>
     private IAmazonS3 GetS3Client(string sSystemName)
     {
-        if (_s3Client.Config.RegionEndpoint.Equals(RegionEndpoint.GetBySystemName(sSystemName)))
+        if (_s3Client!.Config.RegionEndpoint.Equals(RegionEndpoint.GetBySystemName(sSystemName)))
         {
             WriteLog($"S3 client already created with region : {_s3Client.Config.RegionEndpoint.SystemName}. Instantiation skipped.");
             return _s3Client;
@@ -810,4 +921,111 @@ public class Function
 
         return _s3ClientCanada;
     }
+
+    /// <summary>
+    /// Moves the INPROGRESS row from dbo.azure_to_aws_request to audit schema and appends a final SUCCESS / ERROR row.
+    /// Idempotent: if source row already moved, only inserts final status row.
+    /// </summary>
+    private static async Task<bool> MoveAndFinalizeRequestAsync(
+        SqsMessage sqsMessage,
+        Exception? exception,
+        ILambdaContext ctx,
+        CancellationToken ct = default)
+    {
+        string actor = "CopyAzureToAWS.Lambda";
+        string countryCode = sqsMessage.CountryCode;
+        long callDetailId = sqsMessage.CallDetailID;
+        string audioFile = sqsMessage.AudioFile;
+
+        string smsg = "MoveAndFinalizeRequestAsync: {0}";
+        var connectionString = ResolveConnectionString(countryCode, writer: true);
+        if (string.IsNullOrEmpty(connectionString))
+        {
+            ctx.Logger.LogError(string.Format(smsg, $"Database connection string not configured correctly for countrycode:{countryCode} Writer"));
+            return false;
+        }
+
+        var optionsBuilder = new DbContextOptionsBuilder<ApplicationDbContext>();
+        optionsBuilder.UseNpgsql(connectionString);
+        using var db = new ApplicationDbContext(optionsBuilder.Options);
+
+        string finalStatus = (exception == null ? StatusCode.SUCCESS.ToString() : StatusCode.ERROR.ToString());
+        using var tx = await db.Database.BeginTransactionAsync(ct);
+        try
+        {
+            // Fetch current INPROGRESS row (if still in primary table)
+            var source = await db.TableAzureToAWSRequest
+                .FirstOrDefaultAsync(r =>
+                    r.CallDetailID == callDetailId &&
+                    r.AudioFile.ToLower() == audioFile.ToLower(), ct);
+
+            // If present, copy to audit (original state)
+            if (source != null)
+            {
+                // Replace this block inside MoveAndFinalizeRequestAsync:
+
+                // OLD:
+                // DateTime srcCreatedUtc = source.CreatedDate.Kind switch
+                // {
+                //     DateTimeKind.Utc => source.CreatedDate,
+                //     DateTimeKind.Unspecified => DateTime.SpecifyKind(source.CreatedDate, DateTimeKind.Utc),
+                //     DateTimeKind.Local => source.CreatedDate.ToUniversalTime()
+                // };
+
+                // FIXED (exhaustive switch with _ fallback):
+                DateTime srcCreatedUtc = source.CreatedDate.Kind switch
+                {
+                    DateTimeKind.Utc => source.CreatedDate,
+                    DateTimeKind.Unspecified => DateTime.SpecifyKind(source.CreatedDate, DateTimeKind.Utc),
+                    DateTimeKind.Local => source.CreatedDate.ToUniversalTime(),
+                    _ => source.CreatedDate // fallback for any unknown enum value
+                };
+
+                var originalAudit = new TableAzureToAWSRequestAudit
+                {
+                    CallDetailID = source.CallDetailID,
+                    AudioFile = source.AudioFile,
+                    Status = source.Status,        // should be INPROGRESS
+                    ErrorDescription = null,
+                    CreatedDate = source.CreatedDate,
+                    CreatedBy = source.CreatedBy
+                };
+                await db.TableAzureToAWSRequestAudit.AddAsync(originalAudit, ct);
+
+                // Remove from live table (move semantics)
+                db.TableAzureToAWSRequest.Remove(source);
+            }
+            else
+            {
+                ctx.Logger.LogInformation(string.Format(smsg, $"Source row already moved (CallDetailID={callDetailId})."));
+            }
+
+            // Insert final status row
+            var finalAudit = new TableAzureToAWSRequestAudit
+            {
+                CallDetailID = callDetailId,
+                AudioFile = audioFile,
+                Status = finalStatus,
+                ErrorDescription = exception?.ToString(),
+                CreatedDate = DateTime.UtcNow,
+                CreatedBy = actor
+            };
+            await db.TableAzureToAWSRequestAudit.AddAsync(finalAudit, ct);
+
+            await db.SaveChangesAsync(ct);
+            await tx.CommitAsync(ct);
+
+            ctx.Logger.LogInformation(string.Format(smsg, $"Final status '{finalStatus}' recorded CallDetailID={callDetailId}."));
+            return true;
+        }
+        catch (Exception ex)
+        {
+            await tx.RollbackAsync(ct);
+            ctx.Logger.LogError(string.Format(smsg, $"failed CallDetailID={callDetailId}: {ex.Message}"));
+            return false;
+        }
+
+
+    }
+
 }

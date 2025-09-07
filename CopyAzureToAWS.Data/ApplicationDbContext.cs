@@ -13,21 +13,42 @@ public class ApplicationDbContext : DbContext
     public DbSet<TableCallRecordingDetails> TableCallRecordingDetails { get; set; } = null!;
     public DbSet<TableCallDetails> TableCallDetails { get; set; } = null!;
     public DbSet<TableStorage> TableStorage { get; set; } = null!; // ADDED
+    public DbSet<TableAzureToAWSRequestAudit> TableAzureToAWSRequestAudit { get; set; } = null!;
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
 
+        // Audit table (no primary key, allow multiple rows per CallDetailID)
+        modelBuilder.Entity<TableAzureToAWSRequestAudit>(entity =>
+        {
+            entity.ToTable("azure_to_aws_request", "audit");
+            entity.HasKey(e => e.ID);
+            entity.Property(e => e.CallDetailID);
+            entity.Property(e => e.AudioFile).IsRequired();
+            entity.Property(e => e.Status).IsRequired();
+            entity.Property(e => e.ErrorDescription);
+            entity.Property(e => e.CreatedDate);
+            entity.Property(e => e.CreatedBy).HasMaxLength(30);
+            entity.HasIndex(e => e.CallDetailID);
+            entity.HasIndex(e => e.Status);
+
+            entity.Property(e => e.CreatedDate).HasColumnType("timestamp without time zone");
+
+        });
+
         modelBuilder.Entity<TableAzureToAWSRequest>(entity =>
         {
             entity.HasKey(e => e.CallDetailID);
             entity.Property(e => e.CallDetailID);
-            entity.Property(e => e.CallDate);
             entity.Property(e => e.AudioFile).IsRequired().HasMaxLength(255);
             entity.Property(e => e.Status).HasMaxLength(50);
 
             entity.HasIndex(e => e.CallDetailID).IsUnique();
             entity.HasIndex(e => e.Status);
+
+            entity.Property(e => e.CreatedDate).HasColumnType("timestamp without time zone");
+            entity.Property(e => e.UpdatedDate).HasColumnType("timestamp without time zone");
         });
 
         modelBuilder.Entity<TableCallRecordingDetails>(entity =>
