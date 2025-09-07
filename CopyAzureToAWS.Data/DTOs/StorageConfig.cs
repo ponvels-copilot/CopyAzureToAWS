@@ -2,16 +2,16 @@ using System.Text.Json.Serialization;
 
 namespace CopyAzureToAWS.Data.DTOs;
 
-public class StorageConfig
+public class StorageAZURE
 {
     [JsonPropertyName("MSAzureBlob")]
-    public AzureBlobConfig? MSAzureBlob { get; set; }
+    public MSAzureBlob? MSAzureBlob { get; set; }
 
     [JsonPropertyName("MSAzureKeyVault")]
-    public AzureKeyVaultConfig? MSAzureKeyVault { get; set; }
+    public MSAzureKeyVault? MSAzureKeyVault { get; set; }
 }
 
-public class AzureBlobConfig
+public class MSAzureBlob
 {
     public string? EndPoint { get; set; }
     public string? AccountKey { get; set; }
@@ -19,7 +19,7 @@ public class AzureBlobConfig
     public string? ConnectionString { get; set; }
 }
 
-public class AzureKeyVaultConfig
+public class MSAzureKeyVault
 {
     public string? ClientId { get; set; }
     public string? TenantID { get; set; }
