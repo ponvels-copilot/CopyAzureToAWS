@@ -1,14 +1,22 @@
-﻿using Amazon.Lambda.Core;
+﻿using Npgsql.EntityFrameworkCore.PostgreSQL; // Add this using directive at the top of the file
+using Amazon.Lambda.Core;
 using Amazon.Lambda.SQSEvents;
 using Amazon.S3;
-using Amazon.S3.Model;
-using Azure.Storage.Blobs;
 using Microsoft.EntityFrameworkCore;
 using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
 using CopyAzureToAWS.Data;
 using CopyAzureToAWS.Data.DTOs;
+using CopyAzureToAWS.Data.Models;
+using Amazon.SecretsManager;
+using Amazon.SQS;
+using Newtonsoft.Json;
+using System.Reflection;
+using Amazon;
+using Amazon.DynamoDBv2;
+using Amazon.XRay.Recorder.Handlers.AwsSdk;
+using Amazon.SecretsManager.Model;
+using System.Collections.Concurrent;
 
 [assembly: LambdaSerializer(typeof(Amazon.Lambda.Serialization.SystemTextJson.DefaultLambdaJsonSerializer))]
 
@@ -16,11 +24,105 @@ namespace CopyAzureToAWS.Lambda;
 
 public class Function
 {
-    private readonly IAmazonS3 _s3Client;
+    private readonly IAmazonS3? _s3Client;
+    private readonly AmazonSQSClient? _sqsClient;
+    private readonly IAmazonSecretsManager? _secretsManagerClient;
+    private readonly AmazonDynamoDBClient? _dynamoDBClient;
+
+    private readonly string SecretId = Environment.GetEnvironmentVariable("SECRET_ID").ToString();
+    private readonly int SecretsManagerTimeOutInSeconds = int.Parse(Environment.GetEnvironmentVariable("SecretsManagerTimeOutInSeconds").ToString());
+
+    private static bool EnableXrayTrace
+    {
+        get
+        {
+            if (Environment.GetEnvironmentVariable("EnableXrayTrace") == null)
+                return false;
+            else
+                return bool.Parse(Environment.GetEnvironmentVariable("EnableXrayTrace").ToString());
+        }
+    }
+
+    private static bool VerboseLoggging
+    {
+        get
+        {
+            if (Environment.GetEnvironmentVariable("VerboseLoggging") == null)
+                return false;
+            else
+                return bool.Parse(Environment.GetEnvironmentVariable("VerboseLoggging").ToString());
+        }
+    }
+
+    private static string BuildVersion
+    {
+        get
+        {
+            // Get the executing assembly
+            var assembly = Assembly.GetExecutingAssembly();
+
+            // Retrieve the file version attribute
+            var fileVersion = assembly.GetCustomAttribute<AssemblyFileVersionAttribute>()?.Version;
+
+            // If you also want the assembly version
+            var assemblyVersion = assembly.GetName().Version?.ToString();
+
+            // Combine and return the version information
+            return $"Assembly Version: {assemblyVersion}, File Version: {fileVersion}";
+        }
+    }
+
+    // ADDED: Secret cache
+    private static readonly ConcurrentDictionary<string, string> _connCache = new();
+    private static volatile bool _secretLoaded = false;
+    private static readonly object _secretLock = new();
 
     public Function()
     {
+        WriteLog($"{BuildVersion}");
+
+        if (VerboseLoggging)
+        {
+            //logging-in-the-aws-net-sdk
+            //https://stackoverflow.com/questions/60435957/how-do-i-turn-on-verbose-logging-in-the-aws-net-sdk
+            AWSConfigs.LoggingConfig.LogTo = LoggingOptions.Console;
+            WriteLog("SDK Debug logging is enabled");
+        }
+        else
+            WriteLog("SDK Debug logging is not enabled");
+
+        if (EnableXrayTrace)
+        {
+            //https://docs.aws.amazon.com/lambda/latest/dg/csharp-tracing.html
+            AWSSDKHandler.RegisterXRayForAllServices();
+            WriteLog("Intrumenting Lambda with x-ray is enabled");
+        }
+        else
+            WriteLog("Intrumenting Lambda with x-ray is not enabled");
+
+
         _s3Client = new AmazonS3Client();
+        _sqsClient = new AmazonSQSClient();
+        _secretsManagerClient = new AmazonSecretsManagerClient(new AmazonSecretsManagerConfig()
+        {
+            // Avoid 'Signature expired' exceptions by resigning the retried requests.
+            ResignRetries = true,
+            MaxErrorRetry = 3,
+            Timeout = TimeSpan.FromSeconds(SecretsManagerTimeOutInSeconds)
+        });
+        _dynamoDBClient = new AmazonDynamoDBClient();
+
+        WriteLog("AmazonDynamoDBClient and AmazonSQSClient initialization completed - Function()");
+    }
+
+    public Function(IAmazonS3 _s3Client, AmazonSQSClient _sqsClient, IAmazonSecretsManager _secretsManagerClient, AmazonDynamoDBClient _dynamoDBClient)
+    {
+        this._s3Client = _s3Client;
+        this._sqsClient = _sqsClient;
+        this._secretsManagerClient = _secretsManagerClient;
+        this._dynamoDBClient = _dynamoDBClient;
+
+        WriteLog("AmazonDynamoDBClient and AmazonSQSClient initialization completed - Function(parameter)");
     }
 
     /// <summary>
@@ -29,7 +131,7 @@ public class Function
     /// <param name="evnt">SQS event containing messages</param>
     /// <param name="context">Lambda context</param>
     /// <returns>Task</returns>
-    public static async Task FunctionHandler(SQSEvent evnt, ILambdaContext context)
+    public async Task FunctionHandler(SQSEvent evnt, ILambdaContext context)
     {
         foreach (var message in evnt.Records)
         {
@@ -37,22 +139,27 @@ public class Function
         }
     }
 
-    private static async Task ProcessMessage(SQSEvent.SQSMessage message, ILambdaContext context)
+    private async Task ProcessMessage(SQSEvent.SQSMessage message, ILambdaContext context)
     {
         try
         {
             context.Logger.LogInformation($"Processing message: {message.MessageId}");
 
             // Parse the SQS message
-            var sqsMessage = JsonSerializer.Deserialize<SqsMessage>(message.Body);
+            var sqsMessage = JsonConvert.DeserializeObject<SqsMessage>(message.Body);
             if (sqsMessage == null)
             {
                 context.Logger.LogError("Failed to deserialize SQS message");
                 return;
             }
 
-            // Set up database context
-            var connectionString = Environment.GetEnvironmentVariable("CONNECTION_STRING");
+            // ADDED: Load secrets once (cached)
+            await EnsureSecretConnectionsLoadedAsync();
+
+            var country = string.IsNullOrWhiteSpace(sqsMessage.CountryCode) ? "US" : sqsMessage.CountryCode.Trim().ToUpperInvariant();
+
+            // ADDED: Resolve from cache first (Reader role here)
+            var connectionString = ResolveConnectionString(country, writer: false);
             if (string.IsNullOrEmpty(connectionString))
             {
                 context.Logger.LogError("Database connection string not configured");
@@ -60,15 +167,49 @@ public class Function
             }
 
             var optionsBuilder = new DbContextOptionsBuilder<ApplicationDbContext>();
-            optionsBuilder.UseSqlServer(connectionString);
-
+            optionsBuilder.UseNpgsql(connectionString);
+            
             using var dbContext = new ApplicationDbContext(optionsBuilder.Options);
 
-            // Update status to Processing
-            //await UpdateCallDetailStatus(dbContext, sqsMessage.CallDetailId, "Processing", null, context);
+            // Retrieve combined call info (programcode + recording info)
+            var storageInfo = await GetCallDetailsInfoAsync(
+                dbContext,
+                sqsMessage.CallDetailID,
+                sqsMessage.AudioFile,
+                context);
 
-            // Copy file from Azure to S3
-            //await CopyAzureToS3(dbContext, sqsMessage, context);
+            if (storageInfo == null)
+            {
+                context.Logger.LogWarning($"No joined call detail found CallDetailID={sqsMessage.CallDetailID} AudioFile={sqsMessage.AudioFile}");
+                return;
+            }
+
+            context.Logger.LogInformation(
+                $"Joined Call Detail -> CallDetailID={storageInfo.CallDetailID} ProgramCode={storageInfo.ProgramCode ?? "NULL"} " +
+                $"AudioFile={storageInfo.AudioFile ?? "NULL"} IsAzureCloudAudio={storageInfo.IsAzureCloudAudio} Location={storageInfo.AudioFileLocation ?? "NULL"}");
+
+            // ADDED: Fetch default Azure storage definition
+            var azureStorage = await GetDefaultAzureStorageAsync(dbContext);
+            if (azureStorage == null)
+            {
+                context.Logger.LogWarning("Default Azure storage configuration not found (storagetype='azure' AND defaultstorage=true).");
+                return;
+            }
+
+            // ADDED: Deserialize JSON blob into typed config
+            var storageConfig = ParseStorageConfig(azureStorage, context);
+            if (storageConfig?.MSAzureBlob == null)
+            {
+                context.Logger.LogError("Failed to parse Azure Blob configuration from storage JSON.");
+                return;
+            }
+
+            context.Logger.LogInformation(
+                $"Azure Storage Config -> StorageID={azureStorage.StorageID} Endpoint={storageConfig.MSAzureBlob.EndPoint ?? "NULL"} " +
+                $"Bucket(Computed)={azureStorage.BucketName ?? "NULL"}");
+
+            // TODO: use storageInfo + storageConfig to locate and copy the blob.
+            // Copy logic would go here...
         }
         catch (Exception ex)
         {
@@ -76,124 +217,210 @@ public class Function
         }
     }
 
-    //private async Task CopyAzureToS3(ApplicationDbContext dbContext, SqsMessage sqsMessage, ILambdaContext context)
-    //{
-    //    try
-    //    {
-    //        // Download from Azure Blob Storage
-    //        var blobServiceClient = new BlobServiceClient(sqsMessage.AzureConnectionString);
-    //        var blobClient = new BlobClient(new Uri(sqsMessage.AzureBlobUrl));
+    /// <summary>
+    /// Returns the default active Azure storage record:
+    /// storagetype = 'azure' AND defaultstorage = true AND activeind = true.
+    /// If multiple rows exist, prefers most recently updated.
+    /// </summary>
+    private async Task<TableStorage?> GetDefaultAzureStorageAsync(
+        ApplicationDbContext db,
+        int? countryId = null,
+        CancellationToken ct = default)
+    {
+        var query = db.TableStorage
+            .AsNoTracking()
+            .Where(s =>
+                s.StorageType != null &&
+                s.StorageType.ToLower() == "azure" &&
+                s.DefaultStorage &&
+                s.ActiveInd);
 
-    //        context.Logger.LogInformation($"Downloading from Azure: {sqsMessage.AzureBlobUrl}");
+        if (countryId.HasValue)
+            query = query.Where(s => s.CountryID == countryId.Value);
 
-    //        var azureStream = new MemoryStream();
-    //        await blobClient.DownloadToAsync(azureStream);
-    //        azureStream.Position = 0;
+        return await query
+            .OrderByDescending(s => s.UpdatedDate ?? s.CreatedDate)
+            .FirstOrDefaultAsync(ct);
+    }
 
-    //        // Calculate MD5 checksum of Azure content
-    //        var azureMd5 = CalculateMD5(azureStream);
-    //        azureStream.Position = 0;
+    /// <summary>
+    /// Deserialize the JSON column of the storage row into strongly typed StorageConfig.
+    /// </summary>
+    private StorageConfig? ParseStorageConfig(TableStorage storage, ILambdaContext ctx)
+    {
+        if (string.IsNullOrWhiteSpace(storage.Json))
+            return null;
 
-    //        // Upload to S3
-    //        var s3Key = $"{sqsMessage.CallDetailId}/{sqsMessage.AudioFileName}";
-    //        context.Logger.LogInformation($"Uploading to S3: {sqsMessage.S3BucketName}/{s3Key}");
+        try
+        {
+            return System.Text.Json.JsonSerializer.Deserialize<StorageConfig>(
+                storage.Json,
+                new JsonSerializerOptions
+                {
+                    PropertyNameCaseInsensitive = true
+                });
+        }
+        catch (Exception ex)
+        {
+            ctx.Logger.LogError($"ParseStorageConfig failed StorageID={storage.StorageID}: {ex.Message}");
+            return null;
+        }
+    }
 
-    //        var uploadRequest = new PutObjectRequest
-    //        {
-    //            BucketName = sqsMessage.S3BucketName,
-    //            Key = s3Key,
-    //            InputStream = azureStream,
-    //            ContentType = "audio/wav"
-    //        };
+    /// <summary>
+    /// Joins TableCallDetails and TableCallRecordingDetails on CallDetailID and returns
+    /// ProgramCode, AudioFile, AudioFileLocation, IsAzureCloudAudio.
+    /// Optional audioFile filter (case-insensitive) if provided.
+    /// </summary>
+    private async Task<CallDetailStorageInfo?> GetCallDetailsInfoAsync(
+        ApplicationDbContext db,
+        long callDetailId,
+        string? audioFileName,
+        ILambdaContext context,
+        CancellationToken ct = default)
+    {
+        try
+        {
+            var normalizedAudio = audioFileName?.Trim();
+            // Base query (join)
+            var query =
+                from cd in db.TableCallDetails.AsNoTracking()
+                join cr in db.TableCallRecordingDetails.AsNoTracking()
+                    on cd.CallDetailID equals cr.CallDetailID
+                where cd.CallDetailID == callDetailId
+                select new CallDetailStorageInfo
+                {
+                    CallDetailID = cd.CallDetailID,
+                    ProgramCode = cd.ProgramCode,
+                    AudioFile = cr.AudioFile,
+                    AudioFileLocation = cr.AudioFileLocation,
+                    IsAzureCloudAudio = cr.IsAzureCloudAudio
+                };
 
-    //        var uploadResponse = await _s3Client.PutObjectAsync(uploadRequest);
+            if (!string.IsNullOrEmpty(normalizedAudio))
+            {
+                var lowered = normalizedAudio.ToLower();
+                query = query.Where(r => r.AudioFile != null && r.AudioFile.ToLower() == lowered);
+            }
 
-    //        // Get S3 object MD5 checksum
-    //        var getObjectRequest = new GetObjectRequest
-    //        {
-    //            BucketName = sqsMessage.S3BucketName,
-    //            Key = s3Key
-    //        };
+            // If multiple rows (rare), take first deterministic (order by audio file)
+            var result = await query
+                .OrderBy(r => r.AudioFile) // deterministic ordering
+                .FirstOrDefaultAsync(ct);
 
-    //        var s3Stream = new MemoryStream();
-    //        using (var getObjectResponse = await _s3Client.GetObjectAsync(getObjectRequest))
-    //        {
-    //            await getObjectResponse.ResponseStream.CopyToAsync(s3Stream);
-    //        }
-    //        s3Stream.Position = 0;
+            return result;
+        }
+        catch (Exception ex)
+        {
+            context.Logger.LogError($"GetCallStorageInfoAsync failed CallDetailID={callDetailId}: {ex.Message}");
+            return null;
+        }
+    }
 
-    //        var s3Md5 = CalculateMD5(s3Stream);
+    // ADDED: Load secret and cache connection strings once per container
+    private async Task EnsureSecretConnectionsLoadedAsync()
+    {
+        if (_secretLoaded) return;
+        lock (_secretLock)
+        {
+            if (_secretLoaded) return;
+            _secretLoaded = true; // mark to prevent duplicate load attempts
+        }
 
-    //        // Compare MD5 checksums
-    //        if (azureMd5.Equals(s3Md5, StringComparison.OrdinalIgnoreCase))
-    //        {
-    //            context.Logger.LogInformation($"MD5 checksums match: {azureMd5}");
+        var secretId = Environment.GetEnvironmentVariable("SECRET_ID");
 
-    //            // Update database with S3 details and MD5
-    //            var callDetail = await dbContext.TableAzureToAWSRequest
-    //                .FirstOrDefaultAsync(cd => cd.CallDetailId == sqsMessage.CallDetailId);
+        if (string.IsNullOrWhiteSpace(secretId))
+        {
+            Console.WriteLine("SECRET_ID not set");
+            return;
+        }
 
-    //            if (callDetail != null)
-    //            {
-    //                callDetail.S3Key = s3Key;
-    //                callDetail.Md5Checksum = azureMd5;
-    //                callDetail.UpdatedAt = DateTime.UtcNow;
-    //                await dbContext.SaveChangesAsync();
-    //            }
+        if (_secretsManagerClient == null)
+        {
+            Console.WriteLine("Secrets Manager client not initialized.");
+            return;
+        }
 
-    //            // Delete from Azure if checksums match
-    //            context.Logger.LogInformation("Deleting file from Azure storage");
-    //            await blobClient.DeleteAsync();
+        try
+        {
+            var resp = await _secretsManagerClient.GetSecretValueAsync(new GetSecretValueRequest
+            {
+                SecretId = secretId
+            });
 
-    //            // Update status to Completed
-    //            await UpdateCallDetailStatus(dbContext, sqsMessage.CallDetailId, "Completed", null, context);
-    //        }
-    //        else
-    //        {
-    //            context.Logger.LogError($"MD5 checksums do not match. Azure: {azureMd5}, S3: {s3Md5}");
-    //            await UpdateCallDetailStatus(dbContext, sqsMessage.CallDetailId, "Failed", 
-    //                "MD5 checksums do not match between Azure and S3", context);
-    //        }
-    //    }
-    //    catch (Exception ex)
-    //    {
-    //        context.Logger.LogError($"Error copying file: {ex.Message}");
-    //        await UpdateCallDetailStatus(dbContext, sqsMessage.CallDetailId, "Failed", ex.Message, context);
-    //    }
-    //}
+            if (string.IsNullOrWhiteSpace(resp.SecretString))
+            {
+                WriteLog($"Secret '{secretId}' empty.");
+                return;
+            }
 
-    //private async Task UpdateCallDetailStatus(ApplicationDbContext dbContext, string callDetailId, 
-    //    string status, string? errorMessage, ILambdaContext context)
-    //{
-    //    try
-    //    {
-    //        var callDetail = await dbContext.CallDetails
-    //            .FirstOrDefaultAsync(cd => cd.CallDetailId == callDetailId);
+            using var jsonDoc = JsonDocument.Parse(resp.SecretString);
+            var root = jsonDoc.RootElement;
 
-    //        if (callDetail != null)
-    //        {
-    //            callDetail.Status = status;
-    //            callDetail.UpdatedAt = DateTime.UtcNow;
+            LoadConn(root, "ConnectionStrings_USReaderConnection", "USReaderConnection");
+            LoadConn(root, "ConnectionStrings_USWriterConnection", "USWriterConnection");
+            LoadConn(root, "ConnectionStrings_CAReaderConnection", "CAReaderConnection");
+            LoadConn(root, "ConnectionStrings_CAWriterConnection", "CAWriterConnection");
 
-    //            if (!string.IsNullOrEmpty(errorMessage))
-    //            {
-    //                callDetail.ErrorMessage = errorMessage;
-    //            }
+            Console.WriteLine($"Secret '{secretId}' loaded with {_connCache.Count} connection entries.");
+        }
+        catch (ResourceNotFoundException e)
+        {
+            Console.WriteLine($"Secret '{secretId}' not found.", e);
+        }
+        catch (AmazonSecretsManagerException ax)
+        {
+            Console.WriteLine($"Secrets Manager error: {ax.Message}", ax);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Unexpected secret load error: {ex.Message}", ex);
+        }
 
-    //            await dbContext.SaveChangesAsync();
-    //            context.Logger.LogInformation($"Updated call detail {callDetailId} status to {status}");
-    //        }
-    //    }
-    //    catch (Exception ex)
-    //    {
-    //        context.Logger.LogError($"Error updating call detail status: {ex.Message}");
-    //    }
-    //}
+        static void LoadConn(JsonElement root, string jsonKey, string cacheKey)
+        {
+            if (root.TryGetProperty(jsonKey, out var val) && val.ValueKind == JsonValueKind.String)
+            {
+                var cs = val.GetString();
+                if (!string.IsNullOrWhiteSpace(cs))
+                    _connCache[cacheKey] = cs!;
+            }
+        }
+    }
+
+    // ADDED: Resolve connection from cache (country + role)
+    private string? ResolveConnectionString(string country, bool writer)
+    {
+        var c = string.IsNullOrWhiteSpace(country) ? "US" : country.Trim().ToUpperInvariant();
+        var role = writer ? "Writer" : "Reader";
+        var key = $"{c}{role}Connection";
+        if (_connCache.TryGetValue(key, out var cs))
+            return cs;
+
+        // Fallback to US if missing
+        if (!c.Equals("US", StringComparison.OrdinalIgnoreCase) &&
+            _connCache.TryGetValue($"US{role}Connection", out var csUs))
+            return csUs;
+
+        return null;
+    }
 
     private static string CalculateMD5(Stream stream)
     {
         using var md5 = MD5.Create();
         var hashBytes = md5.ComputeHash(stream);
         return Convert.ToHexString(hashBytes).ToLowerInvariant();
+    }
+
+    public static void WriteLog(string message, Exception? ex = null)
+    {
+        string sJsonMsg = JsonConvert.SerializeObject(new Logging()
+        {
+            Message = message.Replace(Environment.NewLine, "\r"),
+            Exception = ex,
+            IsSuccess = ex == null
+        });
+
+        Console.WriteLine(sJsonMsg);
     }
 }

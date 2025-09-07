@@ -155,7 +155,8 @@ public class CallDetailsController : ControllerBase
             var sqsMessage = new SqsMessage
             {
                 CallDetailID = request.CallDetailID,
-                AudioFileName = request.AudioFile,
+                CountryCode = request.CountryCode,
+                AudioFile = request.AudioFile,
                 RequestId = requestId
             };
 

@@ -1,0 +1,104 @@
+using Amazon;
+using Amazon.DynamoDBv2;
+using Amazon.Lambda.Core;
+using Amazon.Lambda.SQSEvents;
+using Amazon.Lambda.TestUtilities;
+using Amazon.Runtime;
+using Amazon.Runtime.CredentialManagement;
+using Amazon.S3;
+using Amazon.SecretsManager;
+using Amazon.SQS;
+using CopyAzureToAWS.Data;
+using CopyAzureToAWS.Data.DTOs;
+using Xunit;
+
+namespace CopyAzureToAWS.Lambda.Tests;
+
+public class FunctionTest
+{
+    public enum EnumAWSProfile
+    {
+        erp_aws_qatch_dev2 = 2,
+        erp_aws_qatch_qa = 3
+    }
+
+    [Fact]
+    public async Task TestSQSEventLambdaFunction()
+    {
+        SetEnvironmentVariables();
+
+        var sqsEvent = new SQSEvent
+        {
+            Records =
+            [
+                // new() {
+                //    Body = "{\r\n\t\t\"CountryCode\": \"US\",\r\n\t\t\"CallDetailID\": 2405431524,\r\n\t\t\"AudioFile\": \"US_377590203_2804080_Audio_r_xavier.ware_20220303115400.wav\",\r\n\t\t\"RequestId\": \"RequestId\"\r\n\t}"
+                //}
+                new() {
+                    Body = "{\r\n\t\t\"CountryCode\": \"CA\",\r\n\t\t\"CallDetailID\": 272265144,\r\n\t\t\"AudioFile\": \"CA_33564779_47483650_Audio_Test.agent1_20240917090832.wav\",\r\n\t\t\"RequestId\": \"RequestId\"\r\n\t}"
+                }
+            ]
+        };
+
+        var logger = new TestLambdaLogger();
+        var context = new TestLambdaContext();
+        AWSCredentials? AWSCredentials = GetAWSCredentials(EnumAWSProfile.erp_aws_qatch_dev2);
+
+        AmazonS3Config _AmazonS3Config = new()
+        {
+            ServiceURL = "https://s3.console.aws.amazon.com",
+            RegionEndpoint = RegionEndpoint.USEast1
+        };
+        IAmazonS3 s3Client = new AmazonS3Client(AWSCredentials, _AmazonS3Config);
+
+        AmazonSQSConfig amazonSQSConfig = new()
+        {
+            ServiceURL = "https://sqs.us-east-1.amazonaws.com"
+        };
+        AmazonSQSClient amazonSQSClient = new(AWSCredentials, amazonSQSConfig);
+
+        AmazonSecretsManagerConfig amazonSecretsManagerConfig = new()
+        {
+            // Avoid 'Signature expired' exceptions by resigning the retried requests.
+            ResignRetries = true,
+            RegionEndpoint = RegionEndpoint.USEast1,
+            Timeout = TimeSpan.FromSeconds(10)
+        };
+        AmazonSecretsManagerClient amazonSecretsManagerClient = new(AWSCredentials, amazonSecretsManagerConfig);
+
+        AmazonDynamoDBConfig amazonDynamoDBConfig = new()
+        {
+            RegionEndpoint = RegionEndpoint.USEast1
+        };
+        AmazonDynamoDBClient dynamoDBClient = new(AWSCredentials, amazonDynamoDBConfig);
+
+        var function = new Function(s3Client, amazonSQSClient, amazonSecretsManagerClient, dynamoDBClient);
+        await function.FunctionHandler(sqsEvent, context);
+
+        Assert.Contains("Processed message foobar", logger.Buffer.ToString());
+    }
+
+    private static AWSCredentials? GetAWSCredentials(EnumAWSProfile enumAWSProfile)
+    {
+        var chain = new CredentialProfileStoreChain();
+        AWSCredentials? credentials = null;
+        if (enumAWSProfile == EnumAWSProfile.erp_aws_qatch_dev2)
+        {
+            if (!chain.TryGetAWSCredentials("erp.aws.qatchdev2", out credentials))
+                throw new Exception("Profile not found.");
+        }
+        else if (enumAWSProfile == EnumAWSProfile.erp_aws_qatch_qa)
+        {
+            if (!chain.TryGetAWSCredentials("erp.aws.qatchqa", out credentials))
+                throw new Exception("Profile not found.");
+        }
+
+        return credentials;
+    }
+
+    private void SetEnvironmentVariables()
+    {
+        Environment.SetEnvironmentVariable("SECRET_ID", "copy-azure-to-aws/dev/azure_to_aws");
+        Environment.SetEnvironmentVariable("SecretsManagerTimeOutInSeconds", "10");
+    }
+}
