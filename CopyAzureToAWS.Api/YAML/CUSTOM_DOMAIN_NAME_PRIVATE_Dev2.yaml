@@ -1,0 +1,182 @@
+#stkinteractionmetadatacustomdomainname
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Create Custom Domain Name for Private API Gateway
+
+Parameters:
+  ApiStage:
+    Type: String
+    Default: dev
+  DomainName:
+    Type: String
+    Default: interactionmetadata-dev.iqor.com
+  CertificateArn:
+    Type: String
+    Description: ARN of the ACM certificate in us-east-1 for custom domain
+    Default: arn:aws:acm:us-east-1:818423342968:certificate/0fb5d65d-3e64-4ef1-91a9-2e62937ec891
+  ApiId:
+    Type: String
+    Description: API Gateway ID for qatch-interactionmetadata
+    Default: tcmd9gt2w9
+  vpceEndpointId:
+    Type: String
+    Description: VPCe
+    Default: vpce-0909347d01c0b50fc
+  Client:
+    Description: Client Info.
+    Type: String
+    AllowedValues:
+      - iqor
+    ConstraintDescription: must specify value.
+    Default: iqor
+  Product:
+    Description: Product Info.
+    Type: String
+    AllowedValues:
+      - qatch
+    ConstraintDescription: must specify value.
+    Default: qatch
+  Owner:
+    Description: Owner Info.
+    Type: String
+    AllowedValues:
+      - sathya.ramakrishnan
+    ConstraintDescription: must specify value.
+    Default: sathya.ramakrishnan
+  CreatedBy:
+    Description: Creator Info.
+    Type: String
+    AllowedValues:
+      - ponvel.shanmuganatha
+      - arun.selvan
+    ConstraintDescription: must specify value.
+    Default: ponvel.shanmuganatha
+  UpdatedBy:
+    Description: Creator Info.
+    Type: String
+    AllowedValues:
+      - ponvel.shanmuganatha
+      - arun.selvan
+    ConstraintDescription: must specify value.
+    Default: ponvel.shanmuganatha
+  Project:
+    Description: Project Info.
+    Type: String
+    AllowedValues:
+      - qatch
+    ConstraintDescription: must specify value.
+    Default: qatch
+  SubProject:
+    Description: SubProject Info.
+    Type: String
+    AllowedValues:
+      - interaction-recording-api
+    ConstraintDescription: must specify value.
+    Default: interaction-recording-api
+  EnvType:
+    Description: Environment type.
+    Type: String
+    AllowedValues:
+      - dev
+      - Prod
+      - qa
+    ConstraintDescription: must specify prod or qa or dev.
+    Default: dev
+  MapMigrated:
+    Description: Map migrated value for aws.
+    Type: String
+    AllowedValues:
+      - d-server-03od8pt5fvt8yh
+    ConstraintDescription: must specify map migrated value
+    Default: d-server-03od8pt5fvt8yh
+  SecondApiId:
+    Type: String
+    Description: Second REST API ID to map to the custom domain
+    Default: e5w3mb41j7
+  SecondApiBasePath:
+    Type: String
+    Description: Base path for the second API (must be non-empty; only one API can be root)
+    Default: api
+
+Resources:
+  PrivateApiDomainName:
+    Type: AWS::ApiGateway::DomainNameV2
+    Properties:
+      DomainName: !Ref DomainName
+      EndpointConfiguration:
+        Types:
+          - PRIVATE
+      CertificateArn: !Ref CertificateArn      
+      Policy:
+        Statement:
+          - Effect: Deny
+            Principal: '*'
+            Action: execute-api:Invoke
+            Resource:
+              - execute-api:/*
+            Condition:
+              StringNotEquals:
+                aws:SourceVpce: !Ref vpceEndpointId
+          - Effect: Allow
+            Principal: '*'
+            # Principal:
+            #   AWS:
+            #     - '830044764036'
+            Action: execute-api:Invoke
+            Resource:
+              - execute-api:/*
+      SecurityPolicy: TLS_1_2
+      Tags:
+        - Key: "Name"
+          Value: !Ref DomainName
+        - Key: "Description"
+          Value: "custom domain name for interactionmetadata"
+        - Key: "map-migrated"
+          Value: !Ref MapMigrated
+        - Key: "Client"
+          Value: !Ref Client
+        - Key: "Product"
+          Value: !Ref Product
+        - Key: "Environment"
+          Value: !Ref EnvType
+        - Key: "Owner"
+          Value: !Ref Owner
+        - Key: "Project"
+          Value: !Ref Project
+        - Key: "CreatedBy"
+          Value: !Ref CreatedBy
+        - Key: "UpdatedBy"
+          Value: !Ref UpdatedBy
+
+  PrivateApiMapping:
+    DependsOn: PrivateApiDomainName
+    Type: AWS::ApiGateway::BasePathMappingV2
+    Properties:
+      #BasePath: app1
+      DomainNameArn: !Ref PrivateApiDomainName
+      RestApiId: !Ref ApiId
+      Stage: !Ref ApiStage
+
+  DomainAccessAssociation:
+    DependsOn: PrivateApiDomainName
+    Type: AWS::ApiGateway::DomainNameAccessAssociation
+    Properties:
+      DomainNameArn: !GetAtt PrivateApiDomainName.DomainNameArn
+      AccessAssociationSource: !Ref vpceEndpointId
+      AccessAssociationSourceType: VPCE
+
+  PrivateApiMapping2:
+    DependsOn: PrivateApiDomainName
+    Type: AWS::ApiGateway::BasePathMappingV2
+    Properties:
+      DomainNameArn: !Ref PrivateApiDomainName
+      RestApiId: !Ref SecondApiId
+      Stage: !Ref ApiStage
+      BasePath: !Ref SecondApiBasePath
+
+# DomainAccessAssociation:
+#   Type: AWS::ApiGateway::DomainNameAccessAssociation
+#   Properties:
+#     #DomainName: !GetAtt PrivateApiDomainName.DomainNameArn #!Ref PrivateApiDomainName
+#     DomainNameArn: !GetAtt PrivateApiDomainName.DomainNameArn
+#     AccessAssociationSource: !Ref vpceEndpointId
+#     AccessAssociationSourceType: VPCE

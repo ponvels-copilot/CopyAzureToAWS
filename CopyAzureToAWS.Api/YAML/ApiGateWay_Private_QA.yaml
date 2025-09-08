@@ -29,20 +29,12 @@ Metadata:
         Parameters:
           - SecretName
       - Label:
-          default: "VPC, Subnets, SecurityGroups Configuration for Azure to AWS Lambda(s)"
+          default: "VPC, Subnets, SecurityGroups Configuration for Azure to AWS Lambda(s) "
         Parameters:
           - VpcId
           - SubnetIds
           - SecurityGroupIds
           - VpcEndpointIds
-      - Label:
-          default: "S3 & DynamoDB Configuration"
-        Parameters:
-          - USS3Bucket
-          - CAS3Bucket
-          - S3BucketLambda
-          - TableClientCountryKMSMap
-
       # - Label:
       #     default: "Azure to AWS S3 Trigger Lambda Code Settings"
       #   Parameters:
@@ -60,7 +52,7 @@ Metadata:
 
     ParameterLabels:
       Environment:
-        default: "Tag for Deployment Environment (dev, alpha, prod)"
+        default: "Tag for Deployment Environment (dev, qa, prod)"
       Client:
         default: "Tag for Client "
       Project:
@@ -85,10 +77,10 @@ Metadata:
         default: "Name of the secret to be created in AWS Secrets Manager"
       # KmsKeyAlias:
       #   default: "KMS Key Alias for swisscolony client"
-      # QatchApiAccessKey:
-      #   default: "Access key for Qatch API for the given environment"
-      # QatchApiAccessSecret:
-      #   default: "Access Secret for Qatch API for the given environment"
+      QatchApiAccessKey:
+        default: "Access key for Qatch API for the given environment"
+      QatchApiAccessSecret:
+        default: "Access Secret for Qatch API for the given environment"
       VpcId:
         default: "VPC to associate Lambda with"
       SubnetIds:
@@ -97,49 +89,46 @@ Metadata:
         default: "Security Groups for Lambda ENIs"
       VpcEndpointIds:
         default: "VPC Endpoint IDs for API Gateway Private integration"
-      # S3Bucket:
-      #   default: "S3 bucket where the lambda packages resides"
-      # LambdaS3TriggerKey:
-      #   default: "S3 bucket prefix to copy the lambda binary packages"
-      # ExistingRoleArn:
-      #   default: "Existing Role to be associated in the given lambda"
-      # QatchS3Bucket:
-      #   default: "Primary Qatch S3 bucket where call recordings are stored"
-      # TriggerBucket:
-      #   default: "S3 bucket name for the trigger to be configured for Lambda for new Metadata JSON"
-      # S3Key:
-      #   default: "S3 bucket prefix to copy the lambda binary packages for SQS Lambda"
-      # SQSLambdaExistingRoleArn:
-      #   default: "Existing ARN Role for SQS Lambda"
-      # QatchTokenEndpoint:
-      #   default: "Qatch API Token Endpoint"
-      # QatchEndpoint:
-      #   default: "Qatch API Endpoint"
+      S3Bucket:
+        default: "S3 bucket where the lambda packages resides"
+      LambdaS3TriggerKey:
+        default: "S3 bucket prefix to copy the lambda binary packages"
+      ExistingRoleArn:
+        default: "Existing Role to be associated in the given lambda"
+      QatchS3Bucket:
+        default: "Primary Qatch S3 bucket where call recordings are stored"
+      TriggerBucket:
+        default: "S3 bucket name for the trigger to be configured for Lambda for new Metadata JSON"
+      S3Key:
+        default: "S3 bucket prefix to copy the lambda binary packages for SQS Lambda"
+      SQSLambdaExistingRoleArn:
+        default: "Existing ARN Role for SQS Lambda"
+      QatchTokenEndpoint:
+        default: "Qatch API Token Endpoint"
+      QatchEndpoint:
+        default: "Qatch API Endpoint"
 
 Parameters:
   VpcId:
     Type: "AWS::EC2::VPC::Id"
-    Default: "vpc-08834460b465731a3"
-    AllowedValues: [vpc-08834460b465731a3]
+    Default: "vpc-074d839c8345db4b1"
   SubnetIds:
     Type: List<AWS::EC2::Subnet::Id>
     Description: Subnets for Lambda ENIs
-    Default: subnet-0a32e71fe797499b6,subnet-0896e97930e347628
+    Default: subnet-0ebbcd03f5592fa6a,subnet-0180ba237f6cef977
   SecurityGroupIds:
     Type: List<AWS::EC2::SecurityGroup::Id>
     Description: Security Groups for Lambda ENIs
-    Default: sg-04fe11d44a2a879b2
-    AllowedValues: [sg-04fe11d44a2a879b2]
+    Default: sg-024c327e33f14c354
   VpcEndpointIds:
     Type: List<String>
     Description: VPC Endpoint IDs for API Gateway Private integration
-    Default: "vpce-0909347d01c0b50fc"
-    AllowedValues: [vpce-0909347d01c0b50fc]
+    Default: "vpce-0049061188bfd9081"
   Environment:
     Description: Environment type.
     Type: String
     AllowedValues: [dev, qa, prod]
-    Default: dev
+    Default: qa
   Client:
     Description: Client Info.
     Type: String
@@ -168,8 +157,8 @@ Parameters:
   SecretName:
     Description: Secret Name.
     Type: String
-    AllowedValues: [azure_to_aws_1]
-    Default: azure_to_aws_1
+    AllowedValues: [azure_to_aws]
+    Default: azure_to_aws
   PostgresConnectionUSReaderString:
     Type: String
     Default: Server=qatch-db-us-qa-writer.iqor.qor.com;Port=5432;Database=qatch;User Id=qatchappreader;Password=mjY54g0ecNJcD6Km;ApplicationName=Azure_to_AWS_WebApi;timeout=60;
@@ -198,26 +187,6 @@ Parameters:
     Type: String
     Default: Azure to AWS
     Description: SubProject tag
-  USS3Bucket:
-    Type: String
-    Default: awsuse1dev2stqatch01
-    AllowedValues: [awsuse1dev2stqatch01]
-    Description: S3 bucket for US region
-  CAS3Bucket:
-    Type: String
-    Default: awscac1dev2stqatch01
-    AllowedValues: [awscac1dev2stqatch01]
-    Description: S3 bucket for CA region
-  S3BucketLambda:
-    Type: String
-    Default: awsuse1dev2stiqor01
-    AllowedValues: [awsuse1dev2stiqor01]
-    Description: S3 bucket where the lambda packages resides
-  TableClientCountryKMSMap:
-    Type: String
-    Default: clientcountrykmsmap
-    AllowedValues: [clientcountrykmsmap]
-    Description: DynamoDB table name for client country KMS mapping
 
 Globals:
   Function:
@@ -294,11 +263,6 @@ Resources:
     Type: AWS::Serverless::Api
     Properties:
       Name: copy-azure-to-aws-rest-private
-      Description: >
-        Private VPC Endpoint–restricted REST API for CopyAzureToAWS.
-        Accepts requests, validates call recording metadata, enqueues SQS
-        copy jobs, and exposes health/status endpoints with X-Ray tracing
-        and structured access logging enabled.
       StageName: !Ref Environment
       EndpointConfiguration:
         Type: PRIVATE
@@ -364,12 +328,10 @@ Resources:
   ##########################################################################
   WebApiFunction:
     Type: AWS::Serverless::Function
-    DeletionPolicy: Delete
-    UpdateReplacePolicy: Delete
     Properties:
       FunctionName: copy-azure-to-aws-api-private
       CodeUri:
-        Bucket: !Ref S3BucketLambda
+        Bucket: awsuse1qas3qatch01
         Key: lambdas/Azure_to_AWS/CopyAzureToAWS.Api.zip
       Handler: CopyAzureToAWS.Api::CopyAzureToAWS.Api.LambdaEntryPoint::FunctionHandlerAsync
       Policies:
@@ -438,8 +400,6 @@ Resources:
   ##########################################################################
   WebApiFunctionLogGroup:
     Type: AWS::Logs::LogGroup
-    DeletionPolicy: Delete          # remove log group too (optional)
-    UpdateReplacePolicy: Delete
     Properties:
       LogGroupName: !Sub /aws/lambda/${WebApiFunction}
       RetentionInDays: 90
@@ -458,8 +418,6 @@ Resources:
   ###########################################################################
   CopyAzureToAWSRequestQueueDLQ:
     Type: AWS::SQS::Queue
-    DeletionPolicy: Delete           # <-- ensure removal on stack delete
-    UpdateReplacePolicy: Delete      # <-- ensure old queue deleted if replaced
     Properties:
       QueueName: copy-azure-to-aws-request-dlq.fifo
       FifoQueue: true
@@ -471,8 +429,6 @@ Resources:
   ###########################################################################
   CopyAzureToAWSRequestQueue:
     Type: AWS::SQS::Queue
-    DeletionPolicy: Delete           # <-- ensure removal on stack delete
-    UpdateReplacePolicy: Delete      # <-- ensure old queue deleted if replaced
     Properties:
       QueueName: copy-azure-to-aws-request.fifo
       FifoQueue: true
@@ -487,12 +443,10 @@ Resources:
   ###########################################################################
   CopyProcessorFunction:
     Type: AWS::Serverless::Function
-    DeletionPolicy: Delete
-    UpdateReplacePolicy: Delete
     Properties:
       FunctionName: copy-azure-to-aws-processor
       CodeUri:
-        Bucket: !Ref S3BucketLambda
+        Bucket: awsuse1qas3qatch01
         Key: lambdas/Azure_to_AWS/CopyAzureToAWS.Processor.Lambda.zip
       Handler: CopyAzureToAWS.Processor.Lambda::CopyAzureToAWS.Processor.Lambda.Function::FunctionHandler
       Runtime: dotnet8
@@ -506,9 +460,9 @@ Resources:
         Variables:
           SECRET_ID: !Sub copy-azure-to-aws/${Environment}/${SecretName}
           SecretsManagerTimeOutInSeconds: 30
-          TableClientCountryKMSMap: !Ref TableClientCountryKMSMap
-          USS3BucketName: !Ref USS3Bucket
-          CAS3BucketName: !Ref CAS3Bucket
+          TableClientCountryKMSMap: clientcountrykmsmap
+          USS3BucketName: awsuse1qas3qatch01
+          CAS3BucketName: awscac1qas3qatch01
           RECORD_AZURE_TO_AWS_STATUS: dbo.usp_record_azure_to_aws_status|Writer
       Policies:
         - AWSLambdaBasicExecutionRole
@@ -536,7 +490,7 @@ Resources:
               Action:
                 - dynamodb:Query
                 - dynamodb:DescribeTable
-              Resource: !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TableClientCountryKMSMap}
+              Resource: !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/clientcountrykmsmap
       Events:
         CopyQueueEvent:
           Type: SQS
@@ -545,87 +499,6 @@ Resources:
             BatchSize: 1
             MaximumBatchingWindowInSeconds: 0
             Enabled: true
-
-  ###########################################################################
-  # SNS Topic for DLQ notifications
-  ###########################################################################
-  DlqAlarmTopic:
-    Type: AWS::SNS::Topic
-    DeletionPolicy: Delete
-    UpdateReplacePolicy: Delete
-    Properties:
-      TopicName: copy-azure-to-aws-dlq-alerts
-      DisplayName: CopyAzureToAWS DLQ Alerts
-      Tags:
-        - Key: Project
-          Value: !Ref Project
-        - Key: Environment
-          Value: !Ref Environment
-        - Key: SubProject
-          Value: !Ref SubProject
-
-  # OPTIONAL: Subscribe an email (uncomment and replace address)
-  DlqAlarmEmailSubscription:
-    Type: AWS::SNS::Subscription
-    DeletionPolicy: Delete
-    UpdateReplacePolicy: Delete
-    Properties:
-      TopicArn: !Ref DlqAlarmTopic
-      Protocol: email
-      Endpoint: QDTWORQBARDEV@iqor.com
-
-  ###########################################################################
-  # CloudWatch Alarm on DLQ visible messages
-  ###########################################################################
-  DlqVisibleMessagesAlarm:
-    Type: AWS::CloudWatch::Alarm
-    DeletionPolicy: Delete
-    UpdateReplacePolicy: Delete
-    Properties:
-      AlarmName: !Sub copy-azure-to-aws-dlq-visible-${Environment}
-      AlarmDescription: !Sub "DLQ has >=1 visible messages in ${Environment}"
-      Namespace: AWS/SQS
-      MetricName: ApproximateNumberOfMessagesVisible
-      Dimensions:
-        - Name: QueueName
-          Value: !GetAtt CopyAzureToAWSRequestQueueDLQ.QueueName
-      Statistic: Sum
-      Period: 60
-      EvaluationPeriods: 1
-      Threshold: 1
-      ComparisonOperator: GreaterThanOrEqualToThreshold
-      TreatMissingData: notBreaching
-      ActionsEnabled: true
-      AlarmActions:
-        - !Ref DlqAlarmTopic
-      OKActions:
-        - !Ref DlqAlarmTopic
-
-  DlqAlarmTopicPolicy:
-    Type: AWS::SNS::TopicPolicy
-    DeletionPolicy: Delete
-    UpdateReplacePolicy: Delete
-    Properties:
-      Topics:
-        - !Ref DlqAlarmTopic
-      PolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Sid: AllowCloudWatchPublish
-            Effect: Allow
-            Principal:
-              Service: cloudwatch.amazonaws.com
-            Action: SNS:Publish
-            Resource: !Ref DlqAlarmTopic
-            Condition:
-              StringEquals:
-                AWS:SourceOwner: !Ref AWS::AccountId
-          - Sid: AllowAccountPublish
-            Effect: Allow
-            Principal:
-              AWS: !Ref AWS::AccountId
-            Action: SNS:Publish
-            Resource: !Ref DlqAlarmTopic
 
 Outputs:
   # Core API + secret identifiers
@@ -650,9 +523,3 @@ Outputs:
     Value: !GetAtt CopyAzureToAWSRequestQueueDLQ.Arn
   ProcessorFunctionName:
     Value: !Ref CopyProcessorFunction
-  DlqAlarmTopicArn:
-    Value: !Ref DlqAlarmTopic
-    Description: SNS topic ARN for DLQ alerts
-  DlqVisibleMessagesAlarmName:
-    Value: !Ref DlqVisibleMessagesAlarm
-    Description: CloudWatch alarm monitoring DLQ message visibility
