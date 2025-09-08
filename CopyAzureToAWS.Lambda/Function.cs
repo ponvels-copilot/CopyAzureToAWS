@@ -385,6 +385,18 @@ public class Function
                     //    sqsMessage,
                     //    null);
                     WriteLog(string.Format(sMsgFormat, $"Recording details updated successfully in CallRecordingDetails table for CallDetailID={callDetailsInfo.CallDetailID}"));
+
+                    //Performing Azure Delete
+                    var (AzureFileDeleted, DelAzureException) = await DeleteAzueBlobAsync(callDetailsInfo, storageConfig);
+
+                    if (AzureFileDeleted)
+                    {
+                        WriteLog(string.Format(sMsgFormat, $"Azure file deleted sucessful for CallDetailID={callDetailsInfo.CallDetailID}, AudioFile:{callDetailsInfo.AudioFile}, AudioFileLocation: {callDetailsInfo.AudioFileLocation}"));
+                    }
+                    else
+                    {
+                        WriteLog(string.Format(sMsgFormat, $"Azure file deletion unsuccessful for CallDetailID={callDetailsInfo.CallDetailID}, AudioFile:{callDetailsInfo.AudioFile}, AudioFileLocation: {callDetailsInfo.AudioFileLocation}"), DelAzureException);
+                    }
                 }
             }
             else
@@ -401,7 +413,7 @@ public class Function
         }
         catch (Exception ex)
         {
-            WriteLog(string.Format(sMsgFormat, $"Error processing message {message.MessageId}"), ex);
+            WriteLog(string.Format(sMsgFormat, $"Error processing message(MessageId): {message.MessageId}"), ex);
         }
     }
 
@@ -427,6 +439,30 @@ public class Function
         catch (Exception ex)
         {
             return (null, ex);
+        }
+    }
+
+    /// <summary>
+    /// Deletes an Azure Blob associated with the specified call details.
+    /// </summary>
+    /// <remarks>This method attempts to delete the specified Azure Blob and returns the result along with any
+    /// exception encountered. If the blob cannot be deleted, the method returns <see langword="false"/> and the
+    /// exception that caused the failure.</remarks>
+    /// <param name="callDetailsInfo">An object containing details about the call, including the location and name of the audio file to delete.</param>
+    /// <param name="storageConfig">The Azure storage configuration used to access the blob storage.</param>
+    /// <returns>A tuple containing a boolean value indicating whether the blob was successfully deleted and an exception object
+    /// if an error occurred during the operation. The exception will be <see langword="null"/> if the operation
+    /// succeeds.</returns>
+    private static async Task<(bool Deleted, Exception? AzureException)> DeleteAzueBlobAsync(CallDetailInfo callDetailsInfo, StorageAZURE storageConfig)
+    {
+        try
+        {
+            FileVault fileVault = new(storageConfig);
+            return (await fileVault.DeleteAzueBlobAsync(callDetailsInfo.AudioFileLocation!, callDetailsInfo.AudioFile!, 60), null);
+        }
+        catch (Exception ex)
+        {
+            return (false, ex);
         }
     }
 
@@ -1137,6 +1173,9 @@ public class Function
         using var tx = await db.Database.BeginTransactionAsync(ct);
         try
         {
+            var nowUnspec = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Unspecified);
+            //var nowUnspec = DateTime.SpecifyKind(GetCurrentEasternTime(), DateTimeKind.Unspecified);
+
             // Fetch current INPROGRESS row (if still in primary table)
             var source = await db.TableAzureToAWSRequest
                 .FirstOrDefaultAsync(r =>
@@ -1146,14 +1185,22 @@ public class Function
             // If present, copy to audit (original state)
             if (source != null)
             {
+                var srcCreated = source.CreatedDate;
+                if (srcCreated.Kind != DateTimeKind.Unspecified)
+                    srcCreated = DateTime.SpecifyKind(
+                        srcCreated.Kind == DateTimeKind.Local ? srcCreated.ToUniversalTime() : srcCreated,
+                        DateTimeKind.Unspecified);
+
                 var originalAudit = new TableAzureToAWSRequestAudit
                 {
                     CallDetailID = source.CallDetailID,
                     AudioFile = source.AudioFile,
                     Status = source.Status,        // should be INPROGRESS
                     ErrorDescription = null,
-                    CreatedDate = source.CreatedDate,
-                    CreatedBy = source.CreatedBy
+                    CreatedDate = srcCreated,
+                    CreatedBy = source.CreatedBy,
+                    UpdatedDate = nowUnspec,
+                    UpdatedBy = actor
                 };
                 await db.TableAzureToAWSRequestAudit.AddAsync(originalAudit, ct);
 
@@ -1172,6 +1219,7 @@ public class Function
                 AudioFile = audioFile,
                 Status = finalStatus,
                 ErrorDescription = exception?.ToString(),
+                CreatedDate = nowUnspec,
                 CreatedBy = actor
             };
             await db.TableAzureToAWSRequestAudit.AddAsync(finalAudit, ct);

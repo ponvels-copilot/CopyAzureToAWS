@@ -34,6 +34,7 @@ public class ApplicationDbContext : DbContext
             entity.HasIndex(e => e.Status);
 
             entity.Property(e => e.CreatedDate).HasColumnType("timestamp without time zone");
+            entity.Property(e => e.UpdatedDate).HasColumnType("timestamp without time zone");
 
         });
 

@@ -4,8 +4,10 @@ using Azure.Security.KeyVault.Keys.Cryptography;
 using Azure.Security.KeyVault.Secrets;
 using Azure.Storage;
 using Azure.Storage.Blobs;
+using Azure.Storage.Blobs.Models;
 using Azure.Storage.Blobs.Specialized;
 using CopyAzureToAWS.Data.DTOs;
+using Microsoft.Identity.Client.Extensions.Msal;
 using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
@@ -226,6 +228,19 @@ namespace CopyAzureToAWS.Common.Utilities
             result.Position = 0;
 
             return result;
+        }
+
+        public async Task<bool> DeleteAzueBlobAsync(string containerName, string blobName, int maximumExecutionTimeSec)
+        {
+            TimeSpan timeout = TimeSpan.FromSeconds(maximumExecutionTimeSec);
+
+            BlobServiceClient blobServiceClient = new(ConnectionString);
+            BlobContainerClient containerClient = blobServiceClient.GetBlobContainerClient(containerName);
+
+            DeleteSnapshotsOption deleteSnapshotsOption = DeleteSnapshotsOption.IncludeSnapshots;
+
+            using CancellationTokenSource cts = new(timeout);
+            return await containerClient.DeleteBlobIfExistsAsync(blobName, deleteSnapshotsOption, null, cts.Token);
         }
 
         private async Task<WrappedContentKey> GetEncryptionKeyId(string containerName, string blobName)
