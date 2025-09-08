@@ -80,7 +80,7 @@ public class FunctionTest
         AmazonDynamoDBClient dynamoDBClient = new(AWSCredentials, amazonDynamoDBConfig);
 
         var function = new Function(s3Client, s3ClientCA, amazonSQSClient, amazonSecretsManagerClient, dynamoDBClient);
-        await function.FunctionHandler(sqsEvent, context);
+        await function.FunctionHandler(sqsEvent);
 
         Assert.Contains("Processed message foobar", logger.Buffer.ToString());
     }
