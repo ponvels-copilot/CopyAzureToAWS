@@ -155,14 +155,14 @@ public class CallDetailsController : ControllerBase
             var sqsMessage = new SqsMessage
             {
                 CallDetailID = request.CallDetailID,
-                CountryCode = request.CountryCode,
+                CountryCode = request.CountryCode!,
                 AudioFile = request.AudioFile,
                 RequestId = requestId
             };
 
             _logger.WriteLog("CallDetails.Queue.Send", $"Sending SQS message. CallDetailID={request.CallDetailID}", requestId);
             // Queue message
-            var queued = await _sqsService.SendMessageAsync(sqsMessage);
+            var (queued, sqsexception) = await _sqsService.SendMessageAsync(sqsMessage);
             if (!queued)
             {
                 #region
@@ -170,14 +170,13 @@ public class CallDetailsController : ControllerBase
                 {
                     CallDetailID = request.CallDetailID,
                     AudioFile = request.AudioFile,
-                    Status = StatusCode.ERROR.ToString(),                   
-                    CreatedBy = "API",
-                    CreatedDate = DateTime.UtcNow
+                    Status = StatusCode.ERROR.ToString(),
+                    ErrorDescription = sqsexception!.ToString()
                 };
 
                 _logger.WriteLog("CallDetails.Status.Write", $"Recording {StatusCode.ERROR} status. CallDetailID={request.CallDetailID}", requestId);
                 // Stored proc write (connection resolved by user access service – must also be country aware)
-                recorded = await RecordAzureToAWSStatus(row, country);
+                recorded = await RecordAzureToAWSStatus(row_ERROR, country);
                 if (!recorded)
                 {
                     _logger.WriteLog("CallDetails.Status.WriteFailed",

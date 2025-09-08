@@ -108,6 +108,7 @@ public class FunctionTest
         Environment.SetEnvironmentVariable("SECRET_ID", "copy-azure-to-aws/dev/azure_to_aws");
         Environment.SetEnvironmentVariable("SecretsManagerTimeOutInSeconds", "10");
         Environment.SetEnvironmentVariable("TableClientCountryKMSMap", "clientcountrykmsmap");
+        Environment.SetEnvironmentVariable("RECORD_AZURE_TO_AWS_STATUS", "dbo.usp_record_azure_to_aws_status");
         Environment.SetEnvironmentVariable("USS3BucketName", "awsuse1dev2stqatch01");
         Environment.SetEnvironmentVariable("CAS3BucketName", "awscac1dev2stqatch01");
 

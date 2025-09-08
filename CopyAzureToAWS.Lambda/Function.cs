@@ -1,11 +1,9 @@
 ﻿using Amazon;
 using Amazon.DynamoDBv2;
 using Amazon.DynamoDBv2.Model;
-using Amazon.DynamoDBv2.Model.Internal.MarshallTransformations;
-using Amazon.Lambda.Core;
 using Amazon.Lambda.SQSEvents;
 using Amazon.S3;
-using Amazon.S3.Model; // ADD this near other using directives
+using Amazon.S3.Model;
 using Amazon.SecretsManager;
 using Amazon.SecretsManager.Model;
 using Amazon.SQS;
@@ -16,14 +14,13 @@ using CopyAzureToAWS.Data.DTOs;
 using CopyAzureToAWS.Data.Models;
 using Microsoft.EntityFrameworkCore;
 using Newtonsoft.Json;
+using Npgsql;
+using NpgsqlTypes;
 using System.Collections.Concurrent;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text.Json;
-using static Amazon.Lambda.SQSEvents.SQSEvent;
-
-//[assembly: LambdaSerializer(typeof(Amazon.Lambda.Serialization.SystemTextJson.DefaultLambdaJsonSerializer))]
 
 namespace CopyAzureToAWS.Lambda;
 
@@ -44,11 +41,13 @@ public class Function
     private readonly IAmazonSecretsManager? _secretsManagerClient;
     private readonly AmazonDynamoDBClient? _dynamoDBClient;
 
-    private readonly string SecretId = Environment.GetEnvironmentVariable("SECRET_ID").ToString();
-    private readonly int SecretsManagerTimeOutInSeconds = int.Parse(Environment.GetEnvironmentVariable("SecretsManagerTimeOutInSeconds").ToString());
-    private readonly string TableClientCountryKMSMap = Environment.GetEnvironmentVariable("TableClientCountryKMSMap");
-    private readonly string USS3BucketName = Environment.GetEnvironmentVariable("USS3BucketName");
-    private readonly string CAS3BucketName = Environment.GetEnvironmentVariable("CAS3BucketName");
+    private readonly string secretId = Environment.GetEnvironmentVariable("SECRET_ID")!;
+    private readonly int SecretsManagerTimeOutInSeconds = int.TryParse(Environment.GetEnvironmentVariable("SecretsManagerTimeOutInSeconds"), out var timeout) ? timeout : 30;
+    private readonly string TableClientCountryKMSMap = Environment.GetEnvironmentVariable("TableClientCountryKMSMap")!;
+    private readonly string RECORD_AZURE_TO_AWS_STATUS = Environment.GetEnvironmentVariable("RECORD_AZURE_TO_AWS_STATUS")!;
+    private readonly string USS3BucketName = Environment.GetEnvironmentVariable("USS3BucketName")!;
+    private readonly string CAS3BucketName = Environment.GetEnvironmentVariable("CAS3BucketName")!;
+    private readonly int CommandTimeout = int.TryParse(Environment.GetEnvironmentVariable("CommandTimeout"), out var timeout) ? timeout : 300;
 
     private static bool EnableXrayTrace
     {
@@ -57,7 +56,7 @@ public class Function
             if (Environment.GetEnvironmentVariable("EnableXrayTrace") == null)
                 return false;
             else
-                return bool.Parse(Environment.GetEnvironmentVariable("EnableXrayTrace").ToString());
+                return bool.Parse(Environment.GetEnvironmentVariable("EnableXrayTrace")!.ToString());
         }
     }
 
@@ -68,7 +67,7 @@ public class Function
             if (Environment.GetEnvironmentVariable("VerboseLoggging") == null)
                 return false;
             else
-                return bool.Parse(Environment.GetEnvironmentVariable("VerboseLoggging").ToString());
+                return bool.Parse(Environment.GetEnvironmentVariable("VerboseLoggging")!.ToString());
         }
     }
 
@@ -194,13 +193,6 @@ public class Function
 
             await EnsureSecretConnectionsLoadedAsync();
 
-            //if (System.Diagnostics.Debugger.IsAttached)
-            //{
-            //    await MoveAndFinalizeRequestAsync(
-            //            sqsMessage,
-            //            null);
-            //}
-
             var country = string.IsNullOrWhiteSpace(sqsMessage.CountryCode) ? "US" : sqsMessage.CountryCode.Trim().ToUpperInvariant();
 
             var connectionString = ResolveConnectionString(country, writer: false);
@@ -262,13 +254,6 @@ public class Function
                 $"Azure Storage Config -> StorageID={azureStorage.StorageID} Endpoint={storageConfig.MSAzureBlob.EndPoint ?? "NULL"} " +
                 $"Bucket(Computed)={azureStorage.BucketName ?? "NULL"}"));
 
-            //download unencrypted file
-            //FileVault fileVault = new(storageConfig);
-            //await fileVault.DownloadBlobAsync(callDetailsInfo.AudioFileLocation, callDetailsInfo.AudioFile, "c:\\temp\test.wav");
-            //decrypt the stream before saving to file
-
-            //string sFilePath = $"D:\\github\\{callDetailsInfo.AudioFile}";
-
             #region DownloadByteArrayAsync
             //if(System.Diagnostics.Debugger.IsAttached)
             //{
@@ -322,39 +307,68 @@ public class Function
                 sqsMessage.CountryCode!,
                 callDetailsInfo.AudioFile!,
                 kmsArn ?? string.Empty,
-                clientcode ?? "default",
-                systemname ?? RegionEndpoint.USEast1.SystemName,
+                clientcode!,
+                systemname!,
                 callDetailsInfo.CallDate);
 
             if (ExceptionUpload == null)
             {
                 WriteLog(string.Format(sMsgFormat, $"Upload succeeded. S3 Key={Key} Size={S3SizeBytes} MD5={S3Md5}"));
 
-                connectionString = ResolveConnectionString(country, writer: true);
-                if (string.IsNullOrEmpty(connectionString))
+                #region "EF"
+                //connectionString = ResolveConnectionString(country, writer: true);
+                //if (string.IsNullOrEmpty(connectionString))
+                //{
+                //    string smsg = $"Database connection string not configured correctly for countrycode:{country} Writer";
+                //    WriteLog(string.Format(sMsgFormat, "Exception"), new Exception(smsg));
+                //    await MoveAndFinalizeRequestAsync(
+                //    sqsMessage,
+                //    new Exception(smsg));
+
+                //    return;
+                //}
+
+                //optionsBuilder = new DbContextOptionsBuilder<ApplicationDbContext>();
+                //optionsBuilder.UseNpgsql(connectionString);
+
+                //using var dbContextWriter = new ApplicationDbContext(optionsBuilder.Options);
+
+                //// Update call_recording_details with new S3 key (location), MD5 and size
+                //var (updated, UpdatException) = await UpdateRecordingDetailsAsync(
+                //    dbContextWriter,
+                //    callDetailsInfo.CallDetailID,
+                //    callDetailsInfo.AudioFile!,
+                //    newaudiofilelocation,
+                //    S3Md5,
+                //    S3SizeBytes);
+
+                //if (!updated)
+                //{
+                //    sMsg = string.Format(sMsgFormat, $"Recording details update failed for CallDetailID={callDetailsInfo.CallDetailID}");
+                //    WriteLog(string.Format(sMsgFormat, "Exception"), new Exception(sMsg));
+
+                //    await MoveAndFinalizeRequestAsync(
+                //        sqsMessage,
+                //        UpdatException);
+                //}
+                //else
+                //{
+                //    await MoveAndFinalizeRequestAsync(
+                //        sqsMessage,
+                //        null);
+                //    WriteLog(string.Format(sMsgFormat, $"Recording details updated successfully in CallRecordingDetails table for CallDetailID={callDetailsInfo.CallDetailID}"));
+                //}
+                #endregion
+
+                var (updated, UpdatException) = await UpdateRecordingDetailsAsync(new UpdateCallRecordingDetails()
                 {
-                    string smsg = $"Database connection string not configured correctly for countrycode:{country} Writer";
-                    WriteLog(string.Format(sMsgFormat, "Exception"), new Exception(smsg));
-                    await MoveAndFinalizeRequestAsync(
-                    sqsMessage,
-                    new Exception(smsg));
-
-                    return;
-                }
-
-                optionsBuilder = new DbContextOptionsBuilder<ApplicationDbContext>();
-                optionsBuilder.UseNpgsql(connectionString);
-
-                using var dbContextWriter = new ApplicationDbContext(optionsBuilder.Options);
-
-                // Update call_recording_details with new S3 key (location), MD5 and size
-                var (updated, UpdatException) = await UpdateRecordingDetailsAsync(
-                    dbContextWriter,
-                    callDetailsInfo.CallDetailID,
-                    callDetailsInfo.AudioFile!,
-                    newaudiofilelocation,
-                    S3Md5,
-                    S3SizeBytes);
+                    CallDetailID = callDetailsInfo.CallDetailID,
+                    AudioFile = callDetailsInfo.AudioFile!,
+                    AudioFileLocation = newaudiofilelocation,
+                    S3Md5 = S3Md5,
+                    S3SizeBytes = S3SizeBytes,
+                    Status = StatusCode.SUCCESS.ToString(),
+                }, country);
 
                 if (!updated)
                 {
@@ -367,9 +381,9 @@ public class Function
                 }
                 else
                 {
-                    await MoveAndFinalizeRequestAsync(
-                        sqsMessage,
-                        null);
+                    //await MoveAndFinalizeRequestAsync(
+                    //    sqsMessage,
+                    //    null);
                     WriteLog(string.Format(sMsgFormat, $"Recording details updated successfully in CallRecordingDetails table for CallDetailID={callDetailsInfo.CallDetailID}"));
                 }
             }
@@ -635,9 +649,6 @@ public class Function
             if (_secretLoaded) return;
             _secretLoaded = true; // Mark now to prevent duplicate load attempts even if an error occurs.
         }
-
-        // Read the secret name from environment (configured in Lambda).
-        var secretId = Environment.GetEnvironmentVariable("SECRET_ID");
 
         // If not configured, log to console and abort (fallback: no DB access later).
         if (string.IsNullOrWhiteSpace(secretId))
@@ -1135,15 +1146,6 @@ public class Function
             // If present, copy to audit (original state)
             if (source != null)
             {
-                //comment: DateTimeKind is unspecified in the database, so we must handle all cases to ensure UTC
-                //DateTime srcCreatedUtc = source.CreatedDate.Kind switch
-                //{
-                //    DateTimeKind.Utc => source.CreatedDate,
-                //    DateTimeKind.Unspecified => DateTime.SpecifyKind(source.CreatedDate, DateTimeKind.Utc),
-                //    DateTimeKind.Local => source.CreatedDate.ToUniversalTime(),
-                //    _ => source.CreatedDate // fallback for any unknown enum value
-                //};
-
                 var originalAudit = new TableAzureToAWSRequestAudit
                 {
                     CallDetailID = source.CallDetailID,
@@ -1151,10 +1153,7 @@ public class Function
                     Status = source.Status,        // should be INPROGRESS
                     ErrorDescription = null,
                     CreatedDate = source.CreatedDate,
-                    CreatedBy = source.CreatedBy,
-                    UpdatedDate = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Unspecified),
-                    //UpdatedDate = GetCurrentEasternTime(),
-                    UpdatedBy = actor
+                    CreatedBy = source.CreatedBy
                 };
                 await db.TableAzureToAWSRequestAudit.AddAsync(originalAudit, ct);
 
@@ -1173,8 +1172,6 @@ public class Function
                 AudioFile = audioFile,
                 Status = finalStatus,
                 ErrorDescription = exception?.ToString(),
-                CreatedDate = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Unspecified),
-                //CreatedDate = GetCurrentEasternTime(),
                 CreatedBy = actor
             };
             await db.TableAzureToAWSRequestAudit.AddAsync(finalAudit, ct);
@@ -1236,5 +1233,47 @@ public class Function
         var utcNow = DateTime.UtcNow;
         var offset = tz.GetUtcOffset(utcNow);
         return new DateTimeOffset(utcNow).ToOffset(offset);
+    }
+
+    /// <summary>
+    /// Updates the recording details in the database by invoking a stored procedure.
+    /// </summary>
+    /// <remarks>This method executes a stored procedure to update recording details in the database. The
+    /// operation is performed  asynchronously and requires a valid database connection string, which is resolved based
+    /// on the provided  countryCode. If the operation fails, the exception is logged and returned as part of the result
+    /// tuple.</remarks>
+    /// <param name="row">An object containing the recording details to be updated.</param>
+    /// <param name="countryCode">The country code used to resolve the appropriate database connection string.</param>
+    /// <returns>A tuple where the first value indicates whether the operation was successful, and the second value is an 
+    /// Exception instance if an error occurred; otherwise, null.</returns>
+    private async Task<(bool, Exception?)> UpdateRecordingDetailsAsync(UpdateCallRecordingDetails row, string countryCode)
+    {
+        try
+        {
+            string[] arr = RECORD_AZURE_TO_AWS_STATUS.Split('|');
+            string spname = arr[0];
+            string role = arr.Length > 1 ? arr[1] : "Writer";
+            var connectionString = ResolveConnectionString(countryCode, role.ToLower().Equals("Writer".ToLower()));
+
+            await using var conn = new NpgsqlConnection(connectionString);
+            await conn.OpenAsync();
+
+            await using var cmd = new NpgsqlCommand
+            {
+                Connection = conn,
+                CommandText = $"CALL {RECORD_AZURE_TO_AWS_STATUS}(:p_json);",
+                CommandType = System.Data.CommandType.Text,
+                CommandTimeout = CommandTimeout
+            };
+            cmd.Parameters.AddWithValue("p_json", NpgsqlDbType.Jsonb, JsonConvert.SerializeObject(row));
+            await cmd.ExecuteNonQueryAsync();
+
+            return (true, null);
+        }
+        catch (Exception ex)
+        {
+            WriteLog($"Stored proc failure CallDetailID={row.CallDetailID} Country={countryCode}", ex);
+            return (false, ex);
+        }
     }
 }

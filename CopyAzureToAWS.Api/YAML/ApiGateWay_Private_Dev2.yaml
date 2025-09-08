@@ -464,6 +464,7 @@ Resources:
           TableClientCountryKMSMap: clientcountrykmsmap
           USS3BucketName: awsuse1dev2stqatch01
           CAS3BucketName: awscac1dev2stqatch01
+          RECORD_AZURE_TO_AWS_STATUS: dbo.usp_record_azure_to_aws_status|Writer
       Policies:
         - AWSLambdaBasicExecutionRole
         - AWSLambdaVPCAccessExecutionRole

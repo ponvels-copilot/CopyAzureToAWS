@@ -10,7 +10,7 @@ namespace CopyAzureToAWS.Api.Services;
 
 public interface ISqsService
 {
-    Task<bool> SendMessageAsync(SqsMessage message);
+    Task<(bool, Exception?)> SendMessageAsync(SqsMessage message);
 }
 
 public class SqsService : ISqsService
@@ -33,7 +33,7 @@ public class SqsService : ISqsService
         _logger.WriteLog(_logger.GetType().Name, $"SQS Service initialized. QueueUrl={_queueUrl}, IsFifo={_isFifo}", "Init");
     }
 
-    public async Task<bool> SendMessageAsync(SqsMessage message)
+    public async Task<(bool , Exception?)> SendMessageAsync(SqsMessage message)
     {
         var requestId = string.IsNullOrWhiteSpace(message.RequestId)
             ? Guid.NewGuid().ToString()
@@ -67,7 +67,7 @@ public class SqsService : ISqsService
                     "Sqs.Send.Success",
                     $"Message sent CallDetailID={message.CallDetailID} MessageId={response.MessageId}",
                     requestId);
-                return true;
+                return (true, null);
             }
 
             _logger.WriteLog(
@@ -75,7 +75,7 @@ public class SqsService : ISqsService
                 $"Non-OK status {(int)response.HttpStatusCode} CallDetailID={message.CallDetailID}",
                 requestId,
                 success: false);
-            return false;
+            return (false, new Exception($"Non-OK status {(int)response.HttpStatusCode} CallDetailID={message.CallDetailID}"));
         }
         catch (Exception ex)
         {
@@ -85,7 +85,7 @@ public class SqsService : ISqsService
                 requestId,
                 success: false,
                 exception: ex);
-            return false;
+            return (false, ex);
         }
     }
 }
