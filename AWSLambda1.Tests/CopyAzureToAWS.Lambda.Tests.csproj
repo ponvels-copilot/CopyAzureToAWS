@@ -20,6 +20,5 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\CopyAzureToAWS.Data\CopyAzureToAWS.Data.csproj" />
-    <ProjectReference Include="..\CopyAzureToAWS.Lambda\CopyAzureToAWS.Lambda.csproj" />
   </ItemGroup>
 </Project>

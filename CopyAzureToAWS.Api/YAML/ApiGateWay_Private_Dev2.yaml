@@ -448,8 +448,8 @@ Resources:
       FunctionName: copy-azure-to-aws-processor
       CodeUri:
         Bucket: awsuse1dev2stiqor01
-        Key: lambdas/Azure_to_AWS/CopyAzureToAWS.Lambda.zip
-      Handler: CopyAzureToAWS.Lambda::CopyAzureToAWS.Lambda.Function::FunctionHandler
+        Key: lambdas/Azure_to_AWS/CopyAzureToAWS.Processor.Lambda.zip
+      Handler: CopyAzureToAWS.Processor.Lambda::CopyAzureToAWS.Processor.Lambda.Function::FunctionHandler
       Runtime: dotnet8
       MemorySize: 1536
       Timeout: 180
@@ -487,6 +487,11 @@ Resources:
                 - secretsmanager:GetSecretValue
                 - secretsmanager:DescribeSecret
               Resource: !Ref SecretData
+            - Effect: Allow
+              Action:
+                - dynamodb:Query
+                - dynamodb:DescribeTable
+              Resource: !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/clientcountrykmsmap
       Events:
         CopyQueueEvent:
           Type: SQS

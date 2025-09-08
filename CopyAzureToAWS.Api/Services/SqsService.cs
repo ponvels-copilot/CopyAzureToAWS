@@ -33,7 +33,7 @@ public class SqsService : ISqsService
         _logger.WriteLog(_logger.GetType().Name, $"SQS Service initialized. QueueUrl={_queueUrl}, IsFifo={_isFifo}", "Init");
     }
 
-    public async Task<(bool , Exception?)> SendMessageAsync(SqsMessage message)
+    public async Task<(bool, Exception?)> SendMessageAsync(SqsMessage message)
     {
         var requestId = string.IsNullOrWhiteSpace(message.RequestId)
             ? Guid.NewGuid().ToString()
@@ -46,11 +46,13 @@ public class SqsService : ISqsService
 
         try
         {
-            var body = JsonSerializer.Serialize(message);
+            var payload = JsonSerializer.Serialize(message);
+            _logger.WriteLog("Sqs.Send.Payload", $"{payload}", requestId);
+
             var request = new SendMessageRequest
             {
                 QueueUrl = _queueUrl,
-                MessageBody = body
+                MessageBody = payload
             };
 
             if (_isFifo)
