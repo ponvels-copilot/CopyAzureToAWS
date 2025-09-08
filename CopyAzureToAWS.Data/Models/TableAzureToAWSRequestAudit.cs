@@ -34,5 +34,11 @@ namespace CopyAzureToAWS.Data.Models
         [MaxLength(30)]
         [Column("createdby")]
         public string CreatedBy { get; set; } = string.Empty;
+
+        [Column("updatedby")]
+        public string? UpdatedBy { get; set; }
+
+        [Column("updateddate")]
+        public DateTime? UpdatedDate { get; set; }
     }
 }

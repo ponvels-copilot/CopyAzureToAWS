@@ -19,6 +19,7 @@ using System.Collections.Concurrent;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Runtime.InteropServices;
 
 //[assembly: LambdaSerializer(typeof(Amazon.Lambda.Serialization.SystemTextJson.DefaultLambdaJsonSerializer))]
 
@@ -156,6 +157,24 @@ public class Function
         }
     }
 
+    /// <summary>
+    /// Processes an SQS message, performing a series of operations including deserialization,  database lookups, Azure
+    /// Blob storage interactions, and S3 uploads.
+    /// </summary>
+    /// <remarks>This method performs the following high-level operations: <list type="bullet">
+    /// <item><description>Deserializes the SQS message body into a <see cref="SqsMessage"/>
+    /// object.</description></item> <item><description>Ensures necessary secret connections are
+    /// loaded.</description></item> <item><description>Resolves the appropriate database connection string based on the
+    /// country code.</description></item> <item><description>Retrieves call details from the database and validates the
+    /// data.</description></item> <item><description>Interacts with Azure Blob storage to retrieve and process audio
+    /// files.</description></item> <item><description>Uploads the processed audio file to AWS S3 and verifies the
+    /// upload.</description></item> <item><description>Updates the database with the new S3 file
+    /// details.</description></item> </list> If any step fails, the method logs the error and attempts to finalize the
+    /// request appropriately.</remarks>
+    /// <param name="message">The SQS message to process. The message body is expected to contain  a JSON payload that can be deserialized
+    /// into an <see cref="SqsMessage"/> object.</param>
+    /// <param name="context">The Lambda execution context, used for logging and runtime information.</param>
+    /// <returns></returns>
     private async Task ProcessMessage(SQSEvent.SQSMessage message, ILambdaContext context)
     {
         try
@@ -170,6 +189,14 @@ public class Function
             }
 
             await EnsureSecretConnectionsLoadedAsync();
+
+            //if (System.Diagnostics.Debugger.IsAttached)
+            //{
+            //    await MoveAndFinalizeRequestAsync(
+            //            sqsMessage,
+            //            null,
+            //            context);
+            //}
 
             var country = string.IsNullOrWhiteSpace(sqsMessage.CountryCode) ? "US" : sqsMessage.CountryCode.Trim().ToUpperInvariant();
 
@@ -364,12 +391,23 @@ public class Function
         }
     }
 
+    /// <summary>
+    /// Asynchronously retrieves a decrypted stream from Azure storage based on the specified call details.
+    /// </summary>
+    /// <remarks>This method attempts to download and decrypt a file from Azure storage. If an error occurs
+    /// during the operation, the exception is captured and returned as part of the tuple. The caller is responsible for
+    /// handling the exception and disposing of the stream, if it is not <see langword="null"/>.</remarks>
+    /// <param name="callDetailsInfo">The details of the call, including the audio file location and name.</param>
+    /// <param name="storageConfig">The Azure storage configuration used to access the file.</param>
+    /// <returns>A tuple containing the decrypted stream and an exception, if any. The first item is the <see cref="Stream"/>
+    /// representing the decrypted file, or <see langword="null"/> if an error occurs. The second item is an <see
+    /// cref="Exception"/> representing the error, or <see langword="null"/> if the operation succeeds.</returns>
     private static async Task<(Stream? AzureStream, Exception? AzureException)> GetAzureStreamAsync(CallDetailInfo callDetailsInfo, StorageAZURE storageConfig)
     {
         try
         {
             FileVault fileVault = new(storageConfig);
-            Stream stream = await fileVault.DownloadDecryptedStreamAsync(callDetailsInfo.AudioFileLocation, callDetailsInfo.AudioFile, 60);
+            Stream stream = await fileVault.DownloadDecryptedStreamAsync(callDetailsInfo.AudioFileLocation!, callDetailsInfo.AudioFile!, 60);
             return (stream, null);
         }
         catch (Exception ex)
@@ -379,9 +417,23 @@ public class Function
     }
 
     /// <summary>
-    /// Updates AudioFileLocation, AudioFileMd5Hash, AudioFileSize for the matching audio record (case-insensitive filename).
-    /// Returns true if row updated.
+    /// Updates the details of a call recording in the database, including its location, MD5 hash, and size.
     /// </summary>
+    /// <remarks>This method retrieves the call recording details from the database based on the provided
+    /// <paramref name="callDetailId"/>  and <paramref name="audioFileName"/>. If a matching record is found, it updates
+    /// the recording's location, MD5 hash,  and size, and resets certain fields to their default values. If no matching
+    /// record is found, the method logs a warning  and returns a failure result.</remarks>
+    /// <param name="db">The database context used to access and update the call recording details.</param>
+    /// <param name="callDetailId">The unique identifier of the call detail record to update.</param>
+    /// <param name="audioFileName">The name of the audio file associated with the call recording.</param>
+    /// <param name="newLocation">The new storage location of the audio file.</param>
+    /// <param name="md5">The MD5 hash of the audio file for integrity verification.</param>
+    /// <param name="sizeBytes">The size of the audio file in bytes.</param>
+    /// <param name="ctx">The Lambda context used for logging and execution context.</param>
+    /// <param name="ct">A cancellation token that can be used to cancel the operation. Defaults to <see cref="CancellationToken.None"/>.</param>
+    /// <returns>A tuple containing a boolean indicating success or failure, and an <see cref="Exception"/> if an error occurred.
+    /// The boolean is <see langword="true"/> if the update was successful; otherwise, <see langword="false"/>. The
+    /// exception is <see langword="null"/> if the operation succeeded.</returns>
     private static async Task<(bool, Exception?)> UpdateRecordingDetailsAsync(
         ApplicationDbContext db,
         long callDetailId,
@@ -429,10 +481,18 @@ public class Function
     }
 
     /// <summary>
-    /// Returns the default active Azure storage record:
-    /// storagetype = 'azure' AND defaultstorage = true AND activeind = true.
-    /// If multiple rows exist, prefers most recently updated.
+    /// Retrieves the default Azure storage configuration from the database.
     /// </summary>
+    /// <remarks>The method filters storage configurations to include only those that are active, marked as default,
+    /// and have a storage type of "Azure". If <paramref name="countryId"/> is provided, the results are further filtered to
+    /// include only configurations associated with the specified country. The most recently updated or created
+    /// configuration is returned.</remarks>
+    /// <param name="db">The database context used to query the storage configurations. Cannot be null.</param>
+    /// <param name="countryId">An optional country identifier to filter the storage configurations. If specified, only storage configurations
+    /// associated with the given country are considered.</param>
+    /// <param name="ct">A <see cref="CancellationToken"/> to observe while waiting for the task to complete.</param>
+    /// <returns>A <see cref="TableStorage"/> object representing the default Azure storage configuration, or <see langword="null"/>
+    /// if no matching configuration is found.</returns>
     private static async Task<TableStorage?> GetDefaultAzureStorageAsync(
         ApplicationDbContext db,
         int? countryId = null,
@@ -455,8 +515,17 @@ public class Function
     }
 
     /// <summary>
-    /// Deserialize the JSON column of the storage row into strongly typed StorageConfig.
+    /// Parses the JSON configuration for a storage object and returns a deserialized <see cref="StorageAZURE"/>
+    /// instance.
     /// </summary>
+    /// <remarks>This method attempts to deserialize the JSON configuration provided in the <paramref
+    /// name="storage"/> parameter. If the JSON is invalid or deserialization fails, the method logs the error using the
+    /// provided <paramref name="ctx"/> and returns the exception.</remarks>
+    /// <param name="storage">The <see cref="TableStorage"/> object containing the JSON configuration to parse.</param>
+    /// <param name="ctx">The Lambda execution context used for logging errors.</param>
+    /// <returns>A tuple containing the deserialized <see cref="StorageAZURE"/> object if parsing is successful, or <c>null</c> if
+    /// the JSON is empty or invalid. The second item in the tuple is an <see cref="Exception"/> if an error occurs
+    /// during parsing; otherwise, <c>null</c>.</returns>
     private static (StorageAZURE?, Exception?) ParseStorageConfig(TableStorage storage, ILambdaContext ctx)
     {
         if (string.IsNullOrWhiteSpace(storage.Json))
@@ -481,10 +550,22 @@ public class Function
     }
 
     /// <summary>
-    /// Joins TableCallDetails and TableCallRecordingDetails on CallDetailID and returns
-    /// ProgramCode, AudioFile, AudioFileLocation, IsAzureCloudAudio.
-    /// Optional audioFile filter (case-insensitive) if provided.
+    /// Retrieves detailed information about a specific call, including associated audio file details, based on the
+    /// provided call detail ID and optional audio file name.
     /// </summary>
+    /// <remarks>If multiple matching records are found, the first record is returned based on a deterministic
+    /// ordering by the audio file name. The method logs any exceptions encountered during execution using the provided
+    /// Lambda context.</remarks>
+    /// <param name="db">The database context used to query call details and recording information.</param>
+    /// <param name="callDetailId">The unique identifier of the call detail to retrieve.</param>
+    /// <param name="audioFileName">An optional parameter specifying the name of the audio file to filter the results. If provided, the query will
+    /// match the audio file name case-insensitively.</param>
+    /// <param name="context">The Lambda context used for logging and execution context.</param>
+    /// <param name="ct">A cancellation token that can be used to cancel the asynchronous operation.</param>
+    /// <returns>A tuple containing the following: <list type="bullet"> <item> <description> <see cref="CallDetailInfo"/>: The
+    /// detailed information about the call, or <see langword="null"/> if no matching record is found. </description>
+    /// </item> <item> <description> <see cref="Exception"/>: An exception instance if an error occurs during the
+    /// operation, or <see langword="null"/> if the operation completes successfully. </description> </item> </list></returns>
     private static async Task<(CallDetailInfo?, Exception?)> GetCallDetailsInfoAsync(
         ApplicationDbContext db,
         long callDetailId,
@@ -531,24 +612,41 @@ public class Function
         }
     }
 
-    // ADDED: Load secret and cache connection strings once per container
+    /// <summary>
+    /// Ensures that secret connection strings are loaded from AWS Secrets Manager and cached for use.
+    /// </summary>
+    /// <remarks>This method retrieves a secret from AWS Secrets Manager, parses it as JSON, and extracts
+    /// specific  connection strings to cache them for later use. The secret name is read from the "SECRET_ID" 
+    /// environment variable. If the secret is not configured, missing, or empty, the method logs a message  and exits
+    /// without caching any connections.  The method uses a double-checked locking mechanism to ensure that the secret
+    /// is loaded only once  per application lifecycle, even in multi-threaded scenarios. If the secret is already
+    /// loaded, the  method returns immediately.  Exceptions related to AWS Secrets Manager (e.g., resource not found,
+    /// throttling, or permissions  issues) are logged, and the method continues execution without throwing. Unexpected
+    /// errors during  parsing or network operations are also logged.</remarks>
+    /// <returns></returns>
     private async Task EnsureSecretConnectionsLoadedAsync()
     {
+        // Fast path: already loaded for this Lambda container lifetime.
         if (_secretLoaded) return;
+
+        // Double-checked lock: guarantee only one thread loads the secret.
         lock (_secretLock)
         {
             if (_secretLoaded) return;
-            _secretLoaded = true; // mark to prevent duplicate load attempts
+            _secretLoaded = true; // Mark now to prevent duplicate load attempts even if an error occurs.
         }
 
+        // Read the secret name from environment (configured in Lambda).
         var secretId = Environment.GetEnvironmentVariable("SECRET_ID");
 
+        // If not configured, log to console and abort (fallback: no DB access later).
         if (string.IsNullOrWhiteSpace(secretId))
         {
             Console.WriteLine("SECRET_ID not set");
             return;
         }
 
+        // If the Secrets Manager client was not constructed (should not normally happen) abort.
         if (_secretsManagerClient == null)
         {
             Console.WriteLine("Secrets Manager client not initialized.");
@@ -557,20 +655,24 @@ public class Function
 
         try
         {
+            // Fetch secret value (string expected JSON).
             var resp = await _secretsManagerClient.GetSecretValueAsync(new GetSecretValueRequest
             {
                 SecretId = secretId
             });
 
+            // Empty secret -> nothing to cache.
             if (string.IsNullOrWhiteSpace(resp.SecretString))
             {
                 WriteLog($"Secret '{secretId}' empty.");
                 return;
             }
 
+            // Parse JSON once; extract each connection string if present.
             using var jsonDoc = JsonDocument.Parse(resp.SecretString);
             var root = jsonDoc.RootElement;
 
+            // Each call safely ignores missing keys.
             LoadConn(root, "ConnectionStrings_USReaderConnection", "USReaderConnection");
             LoadConn(root, "ConnectionStrings_USWriterConnection", "USWriterConnection");
             LoadConn(root, "ConnectionStrings_CAReaderConnection", "CAReaderConnection");
@@ -580,17 +682,21 @@ public class Function
         }
         catch (Amazon.SecretsManager.Model.ResourceNotFoundException e)
         {
+            // Secret does not exist (environment/config issue).
             Console.WriteLine($"Secret '{secretId}' not found.", e);
         }
         catch (AmazonSecretsManagerException ax)
         {
+            // AWS service-side errors (throttling, permissions, etc).
             Console.WriteLine($"Secrets Manager error: {ax.Message}", ax);
         }
         catch (Exception ex)
         {
+            // Any unexpected parsing/network/runtime issue.
             Console.WriteLine($"Unexpected secret load error: {ex.Message}", ex);
         }
 
+        // Local helper: conditionally adds a connection string to cache if found and non-empty.
         static void LoadConn(JsonElement root, string jsonKey, string cacheKey)
         {
             if (root.TryGetProperty(jsonKey, out var val) && val.ValueKind == JsonValueKind.String)
@@ -602,7 +708,17 @@ public class Function
         }
     }
 
-    // ADDED: Resolve connection from cache (country + role)
+    /// <summary>
+    /// Resolves the connection string for the specified country and role (reader or writer).
+    /// </summary>
+    /// <remarks>The method trims and converts the <paramref name="country"/> parameter to uppercase before
+    /// resolving the connection string. Connection strings are retrieved from an internal cache based on the
+    /// combination of the country code and role.</remarks>
+    /// <param name="country">The country code used to determine the connection string. If null or whitespace, defaults to "US".</param>
+    /// <param name="writer">A value indicating whether the connection string is for a writer role.  <see langword="true"/> for writer;
+    /// otherwise, <see langword="false"/> for reader.</param>
+    /// <returns>The resolved connection string if found; otherwise, <see langword="null"/>. If the connection string for the
+    /// specified country is not found, the method attempts to fall back to the "US" connection string.</returns>
     private static string? ResolveConnectionString(string country, bool writer)
     {
         var c = string.IsNullOrWhiteSpace(country) ? "US" : country.Trim().ToUpperInvariant();
@@ -619,6 +735,12 @@ public class Function
         return null;
     }
 
+    /// <summary>
+    /// Computes the MD5 hash of the data from the specified stream and returns it as a lowercase hexadecimal string.
+    /// </summary>
+    /// <param name="stream">The input stream containing the data to hash. The stream must be readable and positioned at the start of the
+    /// data to hash.</param>
+    /// <returns>A lowercase hexadecimal string representing the MD5 hash of the data in the stream.</returns>
     private static string CalculateMD5(Stream stream)
     {
         using var md5 = MD5.Create();
@@ -626,6 +748,14 @@ public class Function
         return Convert.ToHexString(hashBytes).ToLowerInvariant();
     }
 
+    /// <summary>
+    /// Writes a log message to the console in JSON format.
+    /// </summary>
+    /// <remarks>The log message is serialized into a JSON object containing the message, exception details
+    /// (if provided),  and a success flag indicating whether an exception was included. The JSON object is then written
+    /// to the console.</remarks>
+    /// <param name="message">The log message to be written. Cannot be null or empty.</param>
+    /// <param name="ex">An optional exception to include in the log. If null, the log entry is marked as successful.</param>
     public static void WriteLog(string message, Exception? ex = null)
     {
         string sJsonMsg = JsonConvert.SerializeObject(new Logging()
@@ -639,11 +769,25 @@ public class Function
     }
 
     /// <summary>
-    /// Query DynamoDB (TableClientCountryKMSMap) for KMS mapping by ProgramCode (partition key).
-    /// If CountryCode is also stored (non-key) it is applied as a FilterExpression.
-    /// Caches results in-memory for the lifetime of the Lambda container.
-    /// Expected item attributes: ProgramCode (PK), KmsKeyArn, KmsAlias, CountryCode (optional).
+    /// Retrieves the AWS KMS key details associated with the specified program code.
     /// </summary>
+    /// <remarks>This method queries a DynamoDB table to retrieve the KMS key mapping for the specified
+    /// program code.  If the mapping is found, the result is cached for subsequent calls. If the mapping is not found
+    /// or an  error occurs, the method returns an exception in the tuple. <para> The DynamoDB table name must be
+    /// configured in the environment variable <c>TableClientCountryKMSMap</c>,  and the DynamoDB client must be
+    /// initialized before calling this method. </para> <para> The method performs a defensive query with a limit of 5
+    /// items, although only one item is expected  for a given program code. If the KMS key ARN is missing in the
+    /// retrieved item, the method logs an  error and returns an exception. </para></remarks>
+    /// <param name="programCode">The program code used to query the KMS key mapping. Cannot be null, empty, or whitespace.</param>
+    /// <param name="ctx">The Lambda execution context, used for logging and runtime information.</param>
+    /// <param name="ct">A cancellation token that can be used to cancel the operation. Optional.</param>
+    /// <returns>A tuple containing the following elements: <list type="bullet"> <item><description>The ARN of the KMS key, or
+    /// <see langword="null"/> if not found.</description></item> <item><description>The alias of the KMS key, or <see
+    /// langword="null"/> if not found.</description></item> <item><description>The client code associated with the
+    /// program, or <see langword="null"/> if not found.</description></item> <item><description>The system name
+    /// associated with the program, or <see langword="null"/> if not found.</description></item> <item><description>An
+    /// exception if an error occurred, or <see langword="null"/> if the operation was successful.</description></item>
+    /// </list></returns>
     private async Task<(string? Arn, string? Alias, string? ClientCode, string? SystemName, Exception? exception)> GetKmsKeyForProgramAsync(
         string? programCode,
         ILambdaContext ctx,
@@ -862,10 +1006,17 @@ public class Function
     }
 
     /// <summary>
-    /// Computes MD5 for a stream for S3 PutObject (returns hex + base64). 
-    /// If stream is non-seekable, it is buffered into memory once.
-    /// Stream position restored to 0 after computation if seekable.
+    /// Computes the MD5 hash of the content in the provided stream and returns the hash in both hexadecimal and
+    /// Base64-encoded formats.
     /// </summary>
+    /// <remarks>If the provided stream is seekable, its position will be reset to its original value after
+    /// the hash computation. For non-seekable streams, the stream will be consumed and replaced with a buffered memory
+    /// stream if further usage is required.</remarks>
+    /// <param name="stream">The input <see cref="Stream"/> containing the content to hash. The stream must be readable. If the stream is
+    /// non-seekable, it will be fully buffered into memory, and the original stream will be disposed.</param>
+    /// <returns>A tuple containing the MD5 hash of the content in two formats: <list type="bullet"> <item> <term>Hex</term>
+    /// <description>The MD5 hash as a lowercase hexadecimal string.</description> </item> <item> <term>Base64</term>
+    /// <description>The MD5 hash as a Base64-encoded string.</description> </item> </list></returns>
     private static (string Hex, string Base64) ComputeContentMd5ForPut(Stream stream)
     {
         if (!stream.CanSeek)
@@ -923,9 +1074,23 @@ public class Function
     }
 
     /// <summary>
-    /// Moves the INPROGRESS row from dbo.azure_to_aws_request to audit schema and appends a final SUCCESS / ERROR row.
-    /// Idempotent: if source row already moved, only inserts final status row.
+    /// Moves the specified request from the primary table to the audit table and finalizes its status.
     /// </summary>
+    /// <remarks>This method performs the following operations: <list type="bullet"> <item><description>Fetches the
+    /// request from the primary table if it is still in progress.</description></item> <item><description>Copies the
+    /// request to the audit table to preserve its original state.</description></item> <item><description>Removes the
+    /// request from the primary table to complete the "move" operation.</description></item> <item><description>Inserts a
+    /// new record into the audit table with the final status, which is determined based on whether an exception was
+    /// provided.</description></item> </list> If the database connection string for the specified country code is not
+    /// configured, the method logs an error and returns <see langword="false"/>. If an error occurs during the database
+    /// transaction, the transaction is rolled back, the error is logged, and the method returns <see
+    /// langword="false"/>.</remarks>
+    /// <param name="sqsMessage">The message containing details about the request, including the call detail ID and audio file name.</param>
+    /// <param name="exception">An optional exception that, if provided, will be recorded in the audit table as part of the final status.</param>
+    /// <param name="ctx">The Lambda execution context, used for logging and runtime information.</param>
+    /// <param name="ct">A cancellation token that can be used to cancel the operation. Defaults to <see cref="CancellationToken.None"/>.</param>
+    /// <returns>A task that represents the asynchronous operation. The task result is <see langword="true"/> if the operation
+    /// completes successfully; otherwise, <see langword="false"/>.</returns>
     private static async Task<bool> MoveAndFinalizeRequestAsync(
         SqsMessage sqsMessage,
         Exception? exception,
@@ -962,24 +1127,14 @@ public class Function
             // If present, copy to audit (original state)
             if (source != null)
             {
-                // Replace this block inside MoveAndFinalizeRequestAsync:
-
-                // OLD:
-                // DateTime srcCreatedUtc = source.CreatedDate.Kind switch
-                // {
-                //     DateTimeKind.Utc => source.CreatedDate,
-                //     DateTimeKind.Unspecified => DateTime.SpecifyKind(source.CreatedDate, DateTimeKind.Utc),
-                //     DateTimeKind.Local => source.CreatedDate.ToUniversalTime()
-                // };
-
-                // FIXED (exhaustive switch with _ fallback):
-                DateTime srcCreatedUtc = source.CreatedDate.Kind switch
-                {
-                    DateTimeKind.Utc => source.CreatedDate,
-                    DateTimeKind.Unspecified => DateTime.SpecifyKind(source.CreatedDate, DateTimeKind.Utc),
-                    DateTimeKind.Local => source.CreatedDate.ToUniversalTime(),
-                    _ => source.CreatedDate // fallback for any unknown enum value
-                };
+                //comment: DateTimeKind is unspecified in the database, so we must handle all cases to ensure UTC
+                //DateTime srcCreatedUtc = source.CreatedDate.Kind switch
+                //{
+                //    DateTimeKind.Utc => source.CreatedDate,
+                //    DateTimeKind.Unspecified => DateTime.SpecifyKind(source.CreatedDate, DateTimeKind.Utc),
+                //    DateTimeKind.Local => source.CreatedDate.ToUniversalTime(),
+                //    _ => source.CreatedDate // fallback for any unknown enum value
+                //};
 
                 var originalAudit = new TableAzureToAWSRequestAudit
                 {
@@ -988,7 +1143,10 @@ public class Function
                     Status = source.Status,        // should be INPROGRESS
                     ErrorDescription = null,
                     CreatedDate = source.CreatedDate,
-                    CreatedBy = source.CreatedBy
+                    CreatedBy = source.CreatedBy,
+                    UpdatedDate = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Unspecified),
+                    //UpdatedDate = GetCurrentEasternTime(),
+                    UpdatedBy = actor
                 };
                 await db.TableAzureToAWSRequestAudit.AddAsync(originalAudit, ct);
 
@@ -1007,7 +1165,8 @@ public class Function
                 AudioFile = audioFile,
                 Status = finalStatus,
                 ErrorDescription = exception?.ToString(),
-                CreatedDate = DateTime.UtcNow,
+                CreatedDate = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Unspecified),
+                //CreatedDate = GetCurrentEasternTime(),
                 CreatedBy = actor
             };
             await db.TableAzureToAWSRequestAudit.AddAsync(finalAudit, ct);
@@ -1024,8 +1183,50 @@ public class Function
             ctx.Logger.LogError(string.Format(smsg, $"failed CallDetailID={callDetailId}: {ex.Message}"));
             return false;
         }
-
-
     }
 
+    // Cached Eastern TimeZoneInfo (handles Windows vs Linux). Falls back to fixed -05:00 if not found.
+    private static readonly Lazy<TimeZoneInfo> _easternTimeZone = new(() =>
+    {
+        try
+        {
+            // Windows uses "Eastern Standard Time"; Linux/AL2 uses IANA "America/New_York"
+            var id = RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
+                ? "Eastern Standard Time"
+                : "America/New_York";
+            return TimeZoneInfo.FindSystemTimeZoneById(id);
+        }
+        catch (TimeZoneNotFoundException)
+        {
+            return TimeZoneInfo.CreateCustomTimeZone("EST", TimeSpan.FromHours(-5), "Eastern Standard Time", "Eastern Standard Time");
+        }
+        catch (InvalidTimeZoneException)
+        {
+            return TimeZoneInfo.CreateCustomTimeZone("EST", TimeSpan.FromHours(-5), "Eastern Standard Time", "Eastern Standard Time");
+        }
+    });
+
+    /// <summary>
+    /// Returns the current Eastern Time (America/New_York) as a DateTime with Kind=Unspecified.
+    /// Includes DST (EDT) when in effect. Use only if you truly must store local ET.
+    /// Prefer storing UTC plus a separate zone indicator when possible.
+    /// </summary>
+    public static DateTime GetCurrentEasternTime()
+    {
+        var eastern = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, _easternTimeZone.Value);
+        // Mark Unspecified to avoid misleading consumers into thinking it is UTC or local server time.
+        return DateTime.SpecifyKind(eastern, DateTimeKind.Unspecified);
+    }
+
+    /// <summary>
+    /// Returns the current Eastern Time as a DateTimeOffset preserving the correct UTC offset (-05:00 or -04:00).
+    /// Prefer this when you need an absolute point in time + local offset.
+    /// </summary>
+    public static DateTimeOffset GetCurrentEasternTimeOffset()
+    {
+        var tz = _easternTimeZone.Value;
+        var utcNow = DateTime.UtcNow;
+        var offset = tz.GetUtcOffset(utcNow);
+        return new DateTimeOffset(utcNow).ToOffset(offset);
+    }
 }
