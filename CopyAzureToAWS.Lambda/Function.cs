@@ -1,6 +1,7 @@
 ﻿using Amazon;
 using Amazon.DynamoDBv2;
 using Amazon.DynamoDBv2.Model;
+using Amazon.Lambda.Core;
 using Amazon.Lambda.SQSEvents;
 using Amazon.S3;
 using Amazon.S3.Model;
@@ -22,7 +23,7 @@ using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text.Json;
 
-namespace CopyAzureToAWS.Lambda;
+[assembly: LambdaSerializer(typeof(Amazon.Lambda.Serialization.SystemTextJson.DefaultLambdaJsonSerializer))]
 
 public class Function
 {

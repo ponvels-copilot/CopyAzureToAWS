@@ -449,7 +449,7 @@ Resources:
       CodeUri:
         Bucket: awsuse1dev2stiqor01
         Key: lambdas/Azure_to_AWS/CopyAzureToAWS.Lambda.zip
-      Handler: CopyAzureToAWS.Lambda::CopyAzureToAWS.Function::FunctionHandler
+      Handler: CopyAzureToAWS.Lambda::CopyAzureToAWS.Lambda.Function::FunctionHandler
       Runtime: dotnet8
       MemorySize: 1536
       Timeout: 180

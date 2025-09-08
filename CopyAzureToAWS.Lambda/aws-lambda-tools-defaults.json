@@ -1,0 +1,21 @@
+
+{
+    "region" : "us-east-1",
+    "profile" : "818423342968_AWSAdministratorAccess",
+    "configuration" : "Release",
+    "framework"     : "net8.0",
+    "function-name" : "copy-azure-to-aws-processor",
+    "function-description" : "",
+    "package-type"         : "Zip",
+    "function-handler"     : "CopyAzureToAWS.Lambda::CopyAzureToAWS.Lambda.Function::FunctionHandler",
+    "function-memory-size" : 1536,
+    "function-role"        : "arn:aws:iam::818423342968:role/stk-azure-to-aws-restapi--CopyProcessorFunctionRole-o9zqeS0cfImD",
+    "function-timeout"     : 180,
+    "function-runtime"     : "dotnet8",
+    "function-architecture" : "x86_64",
+    "function-subnets"      : "subnet-0a32e71fe797499b6,subnet-0896e97930e347628",
+    "function-security-groups" : "sg-04fe11d44a2a879b2",
+    "tracing-mode"             : "Active",
+    "environment-variables"    : "\"RECORD_AZURE_TO_AWS_STATUS\"=\"dbo.usp_record_azure_to_aws_status|Writer\";\"SECRET_ID\"=\"copy-azure-to-aws/dev/azure_to_aws\";\"TableClientCountryKMSMap\"=\"clientcountrykmsmap\";\"CAS3BucketName\"=\"awscac1dev2stqatch01\";\"USS3BucketName\"=\"awsuse1dev2stqatch01\";\"SecretsManagerTimeOutInSeconds\"=\"30\"",
+    "image-tag"                : ""
+}
