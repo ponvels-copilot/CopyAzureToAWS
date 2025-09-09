@@ -42,7 +42,12 @@ Metadata:
           - CAS3Bucket
           - S3BucketLambda
           - TableClientCountryKMSMap
-
+      - Label:
+          default: "Rest API Configuration"
+        Parameters:
+          - ApiCustomDomainName
+          - ApiCustomDomainBasePath
+          
       # - Label:
       #     default: "Azure to AWS S3 Trigger Lambda Code Settings"
       #   Parameters:
@@ -218,6 +223,19 @@ Parameters:
     Default: clientcountrykmsmap
     AllowedValues: [clientcountrykmsmap]
     Description: DynamoDB table name for client country KMS mapping
+  ApiCustomDomainName:
+    Type: String
+    Description: Existing API Gateway custom domain name to map (must already exist)
+    Default: interactionmetadata-dev.iqor.com
+    AllowedValues: [interactionmetadata-dev.iqor.com]
+  ApiCustomDomainBasePath:
+    Type: String
+    Description: Base path to use (leave empty for root).
+    Default: v1
+    AllowedValues: [v1]
+
+Conditions:
+  HasCustomBasePath: !Not [ !Equals [ !Ref ApiCustomDomainBasePath, '' ] ]
 
 Globals:
   Function:
@@ -626,6 +644,21 @@ Resources:
               AWS: !Ref AWS::AccountId
             Action: SNS:Publish
             Resource: !Ref DlqAlarmTopic
+
+  ##########################################################################
+  # Maps the deployed Stage to the existing custom domain
+  ##########################################################################
+  # RestApiBasePathMapping:
+  #   Type: AWS::ApiGateway::BasePathMapping
+  #   DependsOn: RestApiPrivate
+  #   Properties:
+  #     DomainName: !Ref ApiCustomDomainName
+  #     RestApiId: !Ref RestApiPrivate
+  #     Stage: !Ref Environment
+  #     BasePath is optional; include only if not empty
+  #     CloudFormation cannot set an empty string as BasePath; use a Condition
+  #     (pseudo property via Fn::If)
+  #     BasePath: !If [ HasCustomBasePath, !Ref ApiCustomDomainBasePath, !Ref AWS::NoValue ]
 
 Outputs:
   # Core API + secret identifiers
