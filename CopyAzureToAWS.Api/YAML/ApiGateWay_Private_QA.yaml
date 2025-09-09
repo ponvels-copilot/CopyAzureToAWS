@@ -47,6 +47,7 @@ Metadata:
         Parameters:
           - ApiCustomDomainName
           - ApiCustomDomainBasePath
+          - ApiCustomDomainNameArn
           
       # - Label:
       #     default: "Azure to AWS S3 Trigger Lambda Code Settings"
@@ -228,6 +229,11 @@ Parameters:
     Description: Existing API Gateway custom domain name to map (must already exist)
     Default: interactionmetadata-qa.iqor.com
     AllowedValues: [interactionmetadata-qa.iqor.com]
+  ApiCustomDomainNameArn:
+    Type: String
+    Description: Existing API Gateway custom domain name ARN to map (must already exist)
+    Default: arn:aws:apigateway:us-east-1:830044764036:/domainnames/interactionmetadata-qa.iqor.com+rngykjrorf
+    AllowedValues: [arn:aws:apigateway:us-east-1:830044764036:/domainnames/interactionmetadata-qa.iqor.com+rngykjrorf]
   ApiCustomDomainBasePath:
     Type: String
     Description: Base path to use (leave empty for root).
@@ -648,17 +654,17 @@ Resources:
   ##########################################################################
   # Maps the deployed Stage to the existing custom domain
   ##########################################################################
-  # RestApiBasePathMapping:
-  #   Type: AWS::ApiGateway::BasePathMapping
-  #   DependsOn: RestApiPrivate
-  #   Properties:
-  #     DomainName: !Ref ApiCustomDomainName
-  #     RestApiId: !Ref RestApiPrivate
-  #     Stage: !Ref Environment
-  #     BasePath is optional; include only if not empty
-  #     CloudFormation cannot set an empty string as BasePath; use a Condition
-  #     (pseudo property via Fn::If)
-  #     BasePath: !If [ HasCustomBasePath, !Ref ApiCustomDomainBasePath, !Ref AWS::NoValue ]
+  RestApiBasePathMapping:
+    Type: AWS::ApiGateway::BasePathMappingV2
+    DependsOn: RestApiPrivate
+    Properties:
+      DomainNameArn: !Ref ApiCustomDomainNameArn
+      RestApiId: !Ref RestApiPrivate
+      Stage: !Ref Environment
+      # BasePath is optional; include only if not empty
+      # CloudFormation cannot set an empty string as BasePath; use a Condition
+      # (pseudo property via Fn::If)
+      BasePath: !If [ HasCustomBasePath, !Ref ApiCustomDomainBasePath, !Ref AWS::NoValue ]
 
 Outputs:
   # Core API + secret identifiers
