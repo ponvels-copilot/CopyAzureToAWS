@@ -47,10 +47,22 @@ public class CallDetailsController : ControllerBase
     }
 
     /// <summary>
-    /// Creates a call detail entry. Uses the Writer connection for the specified country (default US).
+    /// Processes a request to queue an Azure call recording for transfer to AWS.
     /// </summary>
-    [HttpPost("CreateCallDetail")]
-    public async Task<IActionResult> CreateCallDetail([FromBody] AzureToAWSRequest request)
+    /// <remarks>This method validates the provided call detail ID and audio file, ensures the recording is an
+    /// Azure call recording, and checks for duplicate requests before queuing the recording for transfer to AWS.  If
+    /// the operation fails at any step, an appropriate HTTP status code and error message are returned.</remarks>
+    /// <param name="request">The request containing details about the Azure call recording, including the call detail ID, audio file name,
+    /// and country code.</param>
+    /// <returns>An <see cref="IActionResult"/> indicating the result of the operation. Possible responses include: <list
+    /// type="bullet"> <item><description><see cref="StatusCodeResult"/> with status 200 (OK) if the recording is
+    /// successfully queued.</description></item> <item><description><see cref="StatusCodeResult"/> with status 400 (Bad
+    /// Request) if the call detail ID or audio file is invalid, or if the recording is not an Azure call
+    /// recording.</description></item> <item><description><see cref="StatusCodeResult"/> with status 409 (Conflict) if
+    /// the recording is already queued.</description></item> <item><description><see cref="StatusCodeResult"/> with
+    /// status 500 (Internal Server Error) if an unexpected error occurs.</description></item> </list></returns>
+    [HttpPost("GetAzureRecording")]
+    public async Task<IActionResult> GetAzureRecording([FromBody] AzureToAWSRequest request)
     {
         var requestId = HttpContext.ResolveRequestId();
         var country = string.IsNullOrWhiteSpace(request.CountryCode) ? "US" : request.CountryCode.Trim().ToUpperInvariant();

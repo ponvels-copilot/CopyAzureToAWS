@@ -386,28 +386,65 @@ Resources:
   ##########################################################################
   # Lambda handling API requests (producer of SQS messages later if wired)
   ##########################################################################
+  WebApiFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub webapi-fn-role-${AWS::StackName}
+      Description: Execution role for WebApiFunction (Copy Azure to AWS API)
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+      Policies:
+        - PolicyName: WebApiFunctionInlineAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: SendToPrimaryQueue
+                Effect: Allow
+                Action: sqs:SendMessage
+                Resource: !GetAtt CopyAzureToAWSRequestQueue.Arn
+              - Sid: ReadSecret
+                Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                  - secretsmanager:DescribeSecret
+                Resource: !Ref SecretData
+      Tags:
+        - Key: Project
+          Value: !Ref Project
+        - Key: SubProject
+          Value: !Ref SubProject
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Client
+          Value: !Ref Client
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: CreatedBy
+          Value: !Ref CreatedBy
+        - Key: UpdatedBy
+          Value: !Ref UpdatedBy
+
   WebApiFunction:
     Type: AWS::Serverless::Function
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
       FunctionName: copy-azure-to-aws-api-private
+      Description: Handles REST API requests; validates input and enqueues copy jobs to SQS.
+      Role: !GetAtt WebApiFunctionRole.Arn
       CodeUri:
         Bucket: !Ref S3BucketLambda
         Key: lambdas/Azure_to_AWS/CopyAzureToAWS.Api.zip
       Handler: CopyAzureToAWS.Api::CopyAzureToAWS.Api.LambdaEntryPoint::FunctionHandlerAsync
-      Policies:
-        - AWSLambdaBasicExecutionRole
-        - AWSLambdaVPCAccessExecutionRole
-        - Statement:
-            - Effect: Allow
-              Action: sqs:SendMessage
-              Resource: !GetAtt CopyAzureToAWSRequestQueue.Arn
-            - Effect: Allow
-              Action:
-                - secretsmanager:GetSecretValue
-                - secretsmanager:DescribeSecret
-              Resource: !Ref SecretData
+      Runtime: dotnet8
       VpcConfig:
         SecurityGroupIds: !Ref SecurityGroupIds
         SubnetIds: !Ref SubnetIds
@@ -418,33 +455,32 @@ Resources:
           GetJwtTokenKey: "dbo.fn_get_jwt_token_key|Reader"
           RecordAzureToAWSStatus: "dbo.usp_record_azure_to_aws_status|Writer"
           AWS__SQS__QueueUrl: !Ref CopyAzureToAWSRequestQueue
-          Logging__LogLevel__Default: Information                       # optional
-          Logging__LogLevel__Microsoft: Information                     # optional
-          Logging__LogLevel__Microsoft_AspNetCore: Information          # optional
-          Logging__LogLevel__CopyAzureToAWS: Information                # optional namespace tuning
+          Logging__LogLevel__Default: Information
+          Logging__LogLevel__Microsoft: Information
+          Logging__LogLevel__Microsoft_AspNetCore: Information
+          Logging__LogLevel__CopyAzureToAWS: Information
       Events:
         ApiRoot:
-          Type: Api
-          Properties:
-            RestApiId: !Ref RestApiPrivate
-            Path: /
-            Method: ANY
+            Type: Api
+            Properties:
+              RestApiId: !Ref RestApiPrivate
+              Path: /
+              Method: ANY
         ApiProxy:
-          Type: Api
-          Properties:
-            RestApiId: !Ref RestApiPrivate
-            Path: /{proxy+}
-            Method: ANY
+            Type: Api
+            Properties:
+              RestApiId: !Ref RestApiPrivate
+              Path: /{proxy+}
+              Method: ANY
       Tags:
-        Name: copy-azure-to-aws-api-private
-        Description: !Ref Description
-        Environment: !Ref Environment
-        Client: !Ref Client
-        CreatedBy: !Ref CreatedBy
-        UpdatedBy: !Ref UpdatedBy
-        Owner: !Ref Owner
         Project: !Ref Project
         SubProject: !Ref SubProject
+        Environment: !Ref Environment
+        Client: !Ref Client
+        Owner: !Ref Owner
+        CreatedBy: !Ref CreatedBy
+        UpdatedBy: !Ref UpdatedBy
+        Description: !Ref Description
 
   ##########################################################################
   # Permission allowing API Gateway to invoke the Lambda integration
@@ -509,12 +545,77 @@ Resources:
   ###########################################################################
   # NEW: Processor Lambda consuming the primary queue
   ###########################################################################
+  CopyProcessorFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub copyprocessor-fn-role-${AWS::StackName}
+      Description: Execution role for CopyProcessorFunction (Copy Azure to AWS Processor)
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+      Policies:
+        - PolicyName: CopyProcessorInlineAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: SqsPrimaryQueueConsume
+                Effect: Allow
+                Action:
+                  - sqs:ReceiveMessage
+                  - sqs:DeleteMessage
+                  - sqs:GetQueueAttributes
+                  - sqs:ChangeMessageVisibility
+                Resource: !GetAtt CopyAzureToAWSRequestQueue.Arn
+              - Sid: SqsDlqRead
+                Effect: Allow
+                Action:
+                  - sqs:GetQueueAttributes
+                  - sqs:ReceiveMessage
+                  - sqs:DeleteMessage
+                Resource: !GetAtt CopyAzureToAWSRequestQueueDLQ.Arn
+              - Sid: SecretsRead
+                Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                  - secretsmanager:DescribeSecret
+                Resource: !Ref SecretData
+              - Sid: DynamoQuery
+                Effect: Allow
+                Action:
+                  - dynamodb:Query
+                  - dynamodb:DescribeTable
+                Resource: !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TableClientCountryKMSMap}
+      Tags:
+        - Key: Project
+          Value: !Ref Project
+        - Key: SubProject
+          Value: !Ref SubProject
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Client
+          Value: !Ref Client
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: CreatedBy
+          Value: !Ref CreatedBy
+        - Key: UpdatedBy
+          Value: !Ref UpdatedBy
+
   CopyProcessorFunction:
     Type: AWS::Serverless::Function
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
       FunctionName: copy-azure-to-aws-processor
+      Description: Consumes SQS messages, retrieves Azure blobs, uploads to S3, updates metadata and cleans up.
+      Role: !GetAtt CopyProcessorFunctionRole.Arn
       CodeUri:
         Bucket: !Ref S3BucketLambda
         Key: lambdas/Azure_to_AWS/CopyAzureToAWS.Processor.Lambda.zip
@@ -534,33 +635,6 @@ Resources:
           USS3BucketName: !Ref USS3Bucket
           CAS3BucketName: !Ref CAS3Bucket
           RECORD_AZURE_TO_AWS_STATUS: dbo.usp_record_azure_to_aws_status|Writer
-      Policies:
-        - AWSLambdaBasicExecutionRole
-        - AWSLambdaVPCAccessExecutionRole
-        - Statement:
-            - Effect: Allow
-              Action:
-                - sqs:ReceiveMessage
-                - sqs:DeleteMessage
-                - sqs:GetQueueAttributes
-                - sqs:ChangeMessageVisibility
-              Resource: !GetAtt CopyAzureToAWSRequestQueue.Arn
-            - Effect: Allow
-              Action:
-                - sqs:GetQueueAttributes
-                - sqs:ReceiveMessage
-                - sqs:DeleteMessage
-              Resource: !GetAtt CopyAzureToAWSRequestQueueDLQ.Arn
-            - Effect: Allow
-              Action:
-                - secretsmanager:GetSecretValue
-                - secretsmanager:DescribeSecret
-              Resource: !Ref SecretData
-            - Effect: Allow
-              Action:
-                - dynamodb:Query
-                - dynamodb:DescribeTable
-              Resource: !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TableClientCountryKMSMap}
       Events:
         CopyQueueEvent:
           Type: SQS
@@ -569,6 +643,15 @@ Resources:
             BatchSize: 1
             MaximumBatchingWindowInSeconds: 0
             Enabled: true
+      Tags:
+        Project: !Ref Project
+        SubProject: !Ref SubProject
+        Environment: !Ref Environment
+        Client: !Ref Client
+        Owner: !Ref Owner
+        CreatedBy: !Ref CreatedBy
+        UpdatedBy: !Ref UpdatedBy
+        Description: !Ref Description
 
   ###########################################################################
   # SNS Topic for DLQ notifications
