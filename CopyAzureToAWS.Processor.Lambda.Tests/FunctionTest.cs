@@ -41,14 +41,14 @@ public class FunctionTest
                 //    Body = "{\r\n\t\t\"CountryCode\": \"CA\",\r\n\t\t\"CallDetailID\": 272266249,\r\n\t\t\"AudioFile\": \"CA_50340010_578156338_Audio_Cisco.testagenta1_20250519115207.wav\",\r\n\t\t\"RequestId\": \"RequestId\"\r\n\t}"
                 //}
                 new() {
-                    Body = "{\r\n\t\t\"CountryCode\": \"CA\",\r\n\t\t\"CallDetailID\": 272266250,\r\n\t\t\"AudioFile\": \"CA_33567629_578156338_Audio_Cisco.testagenta1_20250519115349.wav\",\r\n\t\t\"RequestId\": \"0cefbd47-abe8-4058-95b9-3b31213bc18a\"\r\n\t}"
+                    Body = "{\r\n\t\t\"CountryCode\": \"US\",\r\n\t\t\"CallDetailID\": 2778985351,\r\n\t\t\"AudioFile\": \"US_36348183_555934_Audio_cisco.testsupc1_20230104083301.wav\",\r\n\t\t\"RequestId\": \"0cefbd47-abe8-4058-95b9-3b31213bc18a\"\r\n\t}"
                 }
             ]
         };
 
         var logger = new TestLambdaLogger();
         var context = new TestLambdaContext();
-        AWSCredentials? AWSCredentials = GetAWSCredentials(EnumAWSProfile.erp_aws_qatch_dev2);
+        AWSCredentials? AWSCredentials = GetAWSCredentials(EnumAWSProfile.erp_aws_qatch_qa);
 
         AmazonS3Config _AmazonS3Config = new()
         {
@@ -111,12 +111,20 @@ public class FunctionTest
 
     private void SetEnvironmentVariables()
     {
-        Environment.SetEnvironmentVariable("SECRET_ID", "copy-azure-to-aws/dev/azure_to_aws");
         Environment.SetEnvironmentVariable("SecretsManagerTimeOutInSeconds", "10");
         Environment.SetEnvironmentVariable("TableClientCountryKMSMap", "clientcountrykmsmap");
-        Environment.SetEnvironmentVariable("RECORD_AZURE_TO_AWS_STATUS", "dbo.usp_record_azure_to_aws_status");
-        Environment.SetEnvironmentVariable("USS3BucketName", "awsuse1dev2stqatch01");
-        Environment.SetEnvironmentVariable("CAS3BucketName", "awscac1dev2stqatch01");
+        Environment.SetEnvironmentVariable("RECORD_AZURE_TO_AWS_STATUS", "dbo.usp_record_azure_to_aws_status|Writer");
 
+        //Dev2 AWS Instance
+        //Environment.SetEnvironmentVariable("SECRET_ID", "copy-azure-to-aws/dev/azure_to_aws_1");
+        //Environment.SetEnvironmentVariable("USS3BucketName", "awsuse1dev2stqatch01");
+        //Environment.SetEnvironmentVariable("CAS3BucketName", "awscac1dev2stqatch01");
+        //Environment.SetEnvironmentVariable("CallrecordingsPrefix", "CallRecordings");
+
+        //QA AWS Instance
+        Environment.SetEnvironmentVariable("SECRET_ID", "copy-azure-to-aws/qa/azure_to_aws_1");
+        Environment.SetEnvironmentVariable("USS3BucketName", "awsuse1qas3qatch01");
+        Environment.SetEnvironmentVariable("CAS3BucketName", "awscac1qas3qatch01");
+        Environment.SetEnvironmentVariable("CallrecordingsPrefix", "CallRecordings");
     }
 }

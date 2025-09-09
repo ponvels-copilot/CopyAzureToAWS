@@ -38,6 +38,7 @@ Metadata:
       - Label:
           default: "S3 & DynamoDB Configuration"
         Parameters:
+          - CallRecordingsPrefix
           - USS3Bucket
           - CAS3Bucket
           - S3BucketLambda
@@ -204,6 +205,11 @@ Parameters:
     Type: String
     Default: Azure to AWS
     Description: SubProject tag
+  CallRecordingsPrefix:
+    Type: String
+    Default: CallRecordings
+    AllowedValues: [CallRecordings]
+    Description: S3 bucket for US region
   USS3Bucket:
     Type: String
     Default: awsuse1qas3qatch01
@@ -592,6 +598,44 @@ Resources:
                   - dynamodb:Query
                   - dynamodb:DescribeTable
                 Resource: !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TableClientCountryKMSMap}
+              # Multi-region KMS usage for S3 object encryption/decryption
+              - Sid: KmsSseS3Use
+                Effect: Allow
+                Action:
+                  - kms:GenerateDataKey
+                  - kms:Decrypt
+                  - kms:Encrypt
+                  - kms:DescribeKey
+                Resource:
+                  - arn:aws:kms:us-east-1:830044764036:key/*
+                  - arn:aws:kms:ca-central-1:830044764036:key/*
+                Condition:
+                  StringEquals:
+                    kms:ViaService:
+                      - s3.us-east-1.amazonaws.com
+                      - s3.ca-central-1.amazonaws.com
+              # Optional listing (only keep if your code enumerates keys / aliases)
+              - Sid: KmsList
+                Effect: Allow
+                Action:
+                  - kms:ListKeys
+                  - kms:ListAliases
+                Resource: "*"
+              # --- Added S3 access (US + CA buckets) ---
+              - Sid: S3ListBucketsAccess
+                Effect: Allow
+                Action: s3:ListBucket
+                Resource:
+                  - !Sub arn:aws:s3:::${USS3Bucket}
+                  - !Sub arn:aws:s3:::${CAS3Bucket}
+              - Sid: S3ObjectReadWrite
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource:
+                  - !Sub arn:aws:s3:::${USS3Bucket}/${CallRecordingsPrefix}/*
+                  - !Sub arn:aws:s3:::${CAS3Bucket}/${CallRecordingsPrefix}/*
       Tags:
         - Key: Project
           Value: !Ref Project
@@ -635,6 +679,7 @@ Resources:
           USS3BucketName: !Ref USS3Bucket
           CAS3BucketName: !Ref CAS3Bucket
           RECORD_AZURE_TO_AWS_STATUS: dbo.usp_record_azure_to_aws_status|Writer
+          CallrecordingsPrefix: !Ref CallRecordingsPrefix
       Events:
         CopyQueueEvent:
           Type: SQS

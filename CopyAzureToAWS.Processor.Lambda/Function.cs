@@ -53,6 +53,7 @@ public class Function
     private readonly string RECORD_AZURE_TO_AWS_STATUS = Environment.GetEnvironmentVariable("RECORD_AZURE_TO_AWS_STATUS")!;
     private readonly string USS3BucketName = Environment.GetEnvironmentVariable("USS3BucketName")!;
     private readonly string CAS3BucketName = Environment.GetEnvironmentVariable("CAS3BucketName")!;
+    private readonly string CallrecordingsPrefix = Environment.GetEnvironmentVariable("CallrecordingsPrefix")!;
     private readonly int CommandTimeout = int.TryParse(Environment.GetEnvironmentVariable("CommandTimeout"), out var timeout) ? timeout : 300;
 
     private static string RequestId = string.Empty;
@@ -99,7 +100,6 @@ public class Function
 
     // ADDED: Secret cache
     private static readonly ConcurrentDictionary<string, string> _connCache = new();
-    private static volatile bool _secretLoaded = false;
     private static readonly object _secretLock = new();
 
     private static readonly ConcurrentDictionary<string, (string Arn, string Alias, string ClientCode, string SystemName)> _kmsCache = new(StringComparer.OrdinalIgnoreCase);
@@ -196,13 +196,23 @@ public class Function
             if (sqsMessage == null)
             {
                 sMsg = "Failed to deserialize SQS message";
-                WriteLog("SQS.Message.Failed", string.Format(sMsgFormat, "Exception"), new Exception(sMsg));
+                WriteLog("SQS.Message.Failed", sMsg, new Exception(sMsg));
                 return;
             }
 
             RequestId = sqsMessage.RequestId ?? string.Empty;
 
-            await EnsureSecretConnectionsLoadedAsync();
+            var (SecretFetchSuccess, SecretFetchException) = await EnsureSecretConnectionsLoadedAsync();
+            if (!SecretFetchSuccess)
+            {
+                sMsg = string.Format(sMsgFormat, "Secret data not able to retrieve");
+                WriteLog("Secret.Exception", sMsg, SecretFetchException);
+
+                await MoveAndFinalizeRequestAsync(
+                    sqsMessage,
+                    SecretFetchException);
+                return;
+            }
 
             var country = string.IsNullOrWhiteSpace(sqsMessage.CountryCode) ? "US" : sqsMessage.CountryCode.Trim().ToUpperInvariant();
 
@@ -210,7 +220,7 @@ public class Function
             if (string.IsNullOrEmpty(connectionString))
             {
                 sMsg = string.Format(sMsgFormat, "Database connection string not configured");
-                WriteLog("ConnectionString.Not.Configured", string.Format(sMsgFormat, "Exception"), new Exception(sMsg));
+                WriteLog("ConnectionString.Not.Configured", sMsg, new Exception(sMsg));
                 return;
             }
 
@@ -227,7 +237,7 @@ public class Function
             if (callDetailsInfo == null || exception is not null)
             {
                 sMsg = string.Format(sMsgFormat, $"No joined call detail found CallDetailID={sqsMessage.CallDetailID} AudioFile={sqsMessage.AudioFile}");
-                WriteLog("CallDetailId.No.Match", string.Format(sMsgFormat, "Exception"), new Exception(sMsg));
+                WriteLog("CallDetailId.No.Match", sMsg, new Exception(sMsg));
 
                 await MoveAndFinalizeRequestAsync(
                     sqsMessage,
@@ -240,11 +250,15 @@ public class Function
                 $"Joined Call Detail -> CallDetailID={callDetailsInfo.CallDetailID} ProgramCode={callDetailsInfo.ProgramCode ?? "NULL"} " +
                 $"AudioFile={callDetailsInfo.AudioFile ?? "NULL"} IsAzureCloudAudio={callDetailsInfo.IsAzureCloudAudio} Location={callDetailsInfo.AudioFileLocation ?? "NULL"}"));
 
-            var azureStorage = await GetDefaultAzureStorageAsync(dbContext);
+            var (azureStorage, azureStorageException) = await GetDefaultAzureStorageAsync(dbContext);
             if (azureStorage == null)
             {
                 sMsg = string.Format(sMsgFormat, "Default Azure storage configuration not found (storagetype='azure' AND defaultstorage=true).");
-                WriteLog("Azure.Storage.NotFound", string.Format(sMsgFormat, "Exception"), new Exception(sMsg));
+                WriteLog("Azure.Storage.NotFound", sMsg, azureStorageException);
+
+                await MoveAndFinalizeRequestAsync(
+                    sqsMessage,
+                    azureStorageException);
                 return;
             }
 
@@ -252,7 +266,7 @@ public class Function
             if (storageConfig?.MSAzureBlob == null || exceptionstorage is not null)
             {
                 sMsg = string.Format(sMsgFormat, "Failed to parse Azure Blob configuration from storage JSON.");
-                WriteLog("Azure.Blog.Config.NotFound", string.Format(sMsgFormat, "Exception"), new Exception(sMsg));
+                WriteLog("Azure.Blog.Config.NotFound", sMsg, exceptionstorage);
 
                 await MoveAndFinalizeRequestAsync(
                     sqsMessage,
@@ -291,7 +305,7 @@ public class Function
             if (string.IsNullOrWhiteSpace(kmsArn) || exceptionkmskey is not null)
             {
                 sMsg = string.Format(sMsgFormat, $"Failed to retrieve KMS key for program: {callDetailsInfo.ProgramCode} from dynamodb table: {TableClientCountryKMSMap}.");
-                WriteLog("KMS.Program.NoMap", string.Format(sMsgFormat, "Exception"), new Exception(sMsg));
+                WriteLog("KMS.Program.NoMap", sMsg, exceptionkmskey);
 
                 await MoveAndFinalizeRequestAsync(
                     sqsMessage,
@@ -304,7 +318,7 @@ public class Function
             if (AzureException != null)
             {
                 sMsg = string.Format(sMsgFormat, $"Failed to get Azure stream for CallDetailID={callDetailsInfo.CallDetailID} AudioFile={callDetailsInfo.AudioFile}: {AzureException.Message}");
-                WriteLog("Azure.Stream.Exception", string.Format(sMsgFormat, "Exception"), new Exception(sMsg));
+                WriteLog("Azure.Stream.Exception", sMsg, AzureException);
 
                 await MoveAndFinalizeRequestAsync(
                     sqsMessage,
@@ -384,11 +398,13 @@ public class Function
                 if (!updated)
                 {
                     sMsg = string.Format(sMsgFormat, $"Recording details update failed for CallDetailID={callDetailsInfo.CallDetailID}");
-                    WriteLog("CallRecordingDetails.Update.Failure", string.Format(sMsgFormat, "Exception"), new Exception(sMsg));
+                    WriteLog("CallRecordingDetails.Update.Failure", sMsg, UpdatException);
 
                     await MoveAndFinalizeRequestAsync(
                         sqsMessage,
                         UpdatException);
+
+                    return;
                 }
                 else
                 {
@@ -413,7 +429,7 @@ public class Function
             else
             {
                 sMsg = string.Format(sMsgFormat, $"Azure call upload to AWS is failed for Calldetailid: {sqsMessage.CallDetailID}.");
-                WriteLog("AWS.S3.Upload.Failure", string.Format(sMsgFormat, "Exception"), new Exception(sMsg));
+                WriteLog("AWS.S3.Upload.Failure", sMsg, ExceptionUpload);
 
                 await MoveAndFinalizeRequestAsync(
                     sqsMessage,
@@ -536,7 +552,7 @@ public class Function
         }
         catch (Exception ex)
         {
-            WriteLog("CallRecordingDetails.Exception", string.Format(sMsgFormat, $"error CallDetailID={callDetailId}", ex));
+            WriteLog("CallRecordingDetails.Exception", string.Format(sMsgFormat, $"error CallDetailID={callDetailId}"), ex);
             return (false, ex);
         }
     }
@@ -554,25 +570,33 @@ public class Function
     /// <param name="ct">A <see cref="CancellationToken"/> to observe while waiting for the task to complete.</param>
     /// <returns>A <see cref="TableStorage"/> object representing the default Azure storage configuration, or <see langword="null"/>
     /// if no matching configuration is found.</returns>
-    private static async Task<TableStorage?> GetDefaultAzureStorageAsync(
+    private static async Task<(TableStorage?, Exception?)> GetDefaultAzureStorageAsync(
         ApplicationDbContext db,
         int? countryId = null,
         CancellationToken ct = default)
     {
-        var query = db.TableStorage
-            .AsNoTracking()
-            .Where(s =>
-                s.StorageType != null &&
-                s.StorageType.ToLower() == "azure" &&
-                s.DefaultStorage &&
-                s.ActiveInd);
+        try
+        {
+            var query = db.TableStorage
+                .AsNoTracking()
+                .Where(s =>
+                    s.StorageType != null &&
+                    s.StorageType.ToLower() == "azure" &&
+                    s.DefaultStorage &&
+                    s.ActiveInd);
 
-        if (countryId.HasValue)
-            query = query.Where(s => s.CountryID == countryId.Value);
+            if (countryId.HasValue)
+                query = query.Where(s => s.CountryID == countryId.Value);
 
-        return await query
-            .OrderByDescending(s => s.UpdatedDate ?? s.CreatedDate)
-            .FirstOrDefaultAsync(ct);
+            return (await query
+                .OrderByDescending(s => s.UpdatedDate ?? s.CreatedDate)
+                .FirstOrDefaultAsync(ct), null);
+        }
+        catch (Exception ex)
+        {
+            WriteLog("Storage.Exception", "GetDefaultAzureStorageAsync failed", ex);
+            return (null, ex);
+        }
     }
 
     /// <summary>
@@ -682,35 +706,23 @@ public class Function
     /// throttling, or permissions  issues) are logged, and the method continues execution without throwing. Unexpected
     /// errors during  parsing or network operations are also logged.</remarks>
     /// <returns></returns>
-    private async Task EnsureSecretConnectionsLoadedAsync()
+    private async Task<(bool, Exception?)> EnsureSecretConnectionsLoadedAsync()
     {
         string sMsg = string.Empty;
         string sMsgFormat = "EnsureSecretConnectionsLoadedAsync: {0}";
 
-        // Fast path: already loaded for this Lambda container lifetime.
-        if (_secretLoaded) return;
-
-        // Double-checked lock: guarantee only one thread loads the secret.
-        lock (_secretLock)
-        {
-            if (_secretLoaded) return;
-            _secretLoaded = true; // Mark now to prevent duplicate load attempts even if an error occurs.
-        }
-
         // If not configured, log to console and abort (fallback: no DB access later).
         if (string.IsNullOrWhiteSpace(secretId))
         {
-            WriteLog("Secret.Empty", string.Format(sMsgFormat, "Exception"), new Exception("SECRET_ID not set"));
-            _secretLoaded = false;
-            return;
+            WriteLog("SecretID.Empty", string.Format(sMsgFormat, "Exception"), new Exception("SECRET_ID not set"));
+            return (false, new Exception("Secret Id environment variable is missing"));
         }
 
         // If the Secrets Manager client was not constructed (should not normally happen) abort.
         if (_secretsManagerClient == null)
         {
             WriteLog("Secret.Client.Not.Init", string.Format(sMsgFormat, "Exception"), new Exception("Secrets Manager client not initialized."));
-            _secretLoaded = false;
-            return;
+            return (false, new Exception("Secret Manager Client is not initialized"));
         }
 
         try
@@ -724,11 +736,10 @@ public class Function
             // Empty secret -> nothing to cache.
             if (string.IsNullOrWhiteSpace(resp.SecretString))
             {
-                sMsg = string.Format(sMsgFormat, $"Secret '{secretId}' empty.");
+                sMsg = string.Format(sMsgFormat, $"SecretId: '{secretId}'. Secret string is empty.");
                 WriteLog("Secret.Empty", string.Format(sMsgFormat, "Exception"), new Exception(sMsg));
 
-                _secretLoaded = false;
-                return;
+                return (false, new Exception(sMsg));
             }
 
             // Parse JSON once; extract each connection string if present.
@@ -742,24 +753,25 @@ public class Function
             LoadConn(root, "ConnectionStrings_CAWriterConnection", "CAWriterConnection");
 
             WriteLog("Secret.Success", string.Format(sMsgFormat, $"Secret '{secretId}' loaded with {_connCache.Count} connection entries."));
+            return (true, null);
         }
         catch (Amazon.SecretsManager.Model.ResourceNotFoundException e)
         {
             // Secret does not exist (environment/config issue).
             WriteLog("Secret.ResourceNotFound", string.Format(sMsgFormat, $"Secret '{secretId}' not found."), e);
-            _secretLoaded = false;
+            return (false, e);
         }
         catch (AmazonSecretsManagerException ax)
         {
             // AWS service-side errors (throttling, permissions, etc).
             WriteLog("Secret.ManagerException", string.Format(sMsgFormat, $"Secrets Manager error: {ax.Message}"), ax);
-            _secretLoaded = false;
+            return (false, ax);
         }
         catch (Exception ex)
         {
             // Any unexpected parsing/network/runtime issue.
             WriteLog("Secret.Exception", string.Format(sMsgFormat, $"Unexpected secret load error: {ex.Message}"), ex);
-            _secretLoaded = false;
+            return (false, ex);
         }
 
         // Local helper: conditionally adds a connection string to cache if found and non-empty.
@@ -970,14 +982,14 @@ public class Function
         if (_s3Client == null)
         {
             sMsg = string.Format(sMsgFormat, "S3 client not initialized");
-            WriteLog("S3.Client.NotInit", string.Format(sMsgFormat, "Exception", new Exception(sMsg)));
+            WriteLog("S3.Client.NotInit", string.Format(sMsgFormat, "Exception"), new Exception(sMsg));
             return (null, null, string.Empty, string.Empty, string.Empty, 0, new Exception(sMsg));
         }
 
         if (azureStream == null || !azureStream.CanRead)
         {
-            sMsg = string.Format(sMsgFormat, "Azure stream invalid");
-            WriteLog("Azure.Stream.Invalid", string.Format(sMsgFormat, "Exception", new Exception(sMsg)));
+            sMsg = string.Format(sMsgFormat, "Azure stream is invalid");
+            WriteLog("Azure.Stream.Invalid", string.Format(sMsgFormat, "Exception"), new Exception(sMsg));
             return (null, null, string.Empty, string.Empty, string.Empty, 0, new Exception(sMsg));
         }
 
@@ -990,18 +1002,20 @@ public class Function
         if (string.IsNullOrWhiteSpace(bucket))
         {
             sMsg = string.Format(sMsgFormat, "Resolved bucket name empty (check env USS3BucketName / CAS3BucketName)");
-            WriteLog("S3.Bucket.Empty", string.Format(sMsgFormat, "Exception", new Exception(sMsg)));
+            WriteLog("S3.Bucket.Empty", string.Format(sMsgFormat, "Exception"), new Exception(sMsg));
             return (bucket, null, string.Empty, string.Empty, string.Empty, 0, new Exception(sMsg));
         }
 
         DateTime dateTime = CallDate ?? DateTime.UtcNow;
-        var key = $"callrecordings/{clientcode}/{dateTime:yyyy}/{dateTime:MM}/{dateTime:dd}/{dateTime:HH}/{dateTime:mm}/{fileName}";
-        var newaudiofilelocation = $"{bucket}/callrecordings/{clientcode}/{dateTime:yyyy}/{dateTime:MM}/{dateTime:dd}/{dateTime:HH}/{dateTime:mm}";
+        var prefix = $"{CallrecordingsPrefix}/{clientcode}/{dateTime:yyyy}/{dateTime:MM}/{dateTime:dd}/{dateTime:HH}/{dateTime:mm}";
+        var key = $"{prefix}/{fileName}";
+        var newaudiofilelocation = $"{bucket}/{prefix}";
+        WriteLog("S3 variables", "prefix: {prefix}\nkey: {key}\nnewaudiofilelocation:{newaudiofilelocation}");
 
         if (string.IsNullOrWhiteSpace(key))
         {
             sMsg = string.Format(sMsgFormat, "unable to frame the key (s3 prefix)");
-            WriteLog("S3.Key.Empty", string.Format(sMsgFormat, "Exception", new Exception(sMsg)));
+            WriteLog("S3.Key.Empty", string.Format(sMsgFormat, "Exception"), new Exception(sMsg));
             return (bucket, null, newaudiofilelocation, string.Empty, string.Empty, 0, new Exception(sMsg));
         }
 
@@ -1032,7 +1046,7 @@ public class Function
             if (putResp.HttpStatusCode != System.Net.HttpStatusCode.OK)
             {
                 sMsg = string.Format(sMsgFormat, $"PutObject non-OK: {putResp.HttpStatusCode}");
-                WriteLog("S3.PutObject.Fail", string.Format(sMsgFormat, "Exception", new Exception(sMsg)));
+                WriteLog("S3.PutObject.Fail", string.Format(sMsgFormat, "Exception"), new Exception(sMsg));
                 return (bucket, key, newaudiofilelocation, azureMd5Hex, "", 0, new Exception(sMsg));
             }
 
@@ -1053,7 +1067,7 @@ public class Function
             if (!match)
             {
                 sMsg = string.Format(sMsgFormat, $"MD5 mismatch Azure={azureMd5Hex} S3={s3Md5Hex} Bucket={bucket} Key={key}");
-                WriteLog("S3.Md5.Fail", string.Format(sMsgFormat, "Exception", new Exception(sMsg)));
+                WriteLog("S3.Md5.Fail", string.Format(sMsgFormat, "Exception"), new Exception(sMsg));
                 return (bucket, key, newaudiofilelocation, azureMd5Hex, s3Md5Hex, s3Size, new Exception(sMsg));
             }
 
@@ -1322,7 +1336,7 @@ public class Function
             await using var cmd = new NpgsqlCommand
             {
                 Connection = conn,
-                CommandText = $"CALL {RECORD_AZURE_TO_AWS_STATUS}(:p_json);",
+                CommandText = $"CALL {spname}(:p_json);",
                 CommandType = System.Data.CommandType.Text,
                 CommandTimeout = CommandTimeout
             };
