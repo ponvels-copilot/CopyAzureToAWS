@@ -30,12 +30,12 @@ public class TableAzureToAWSRequest
     public string CreatedBy { get; set; } = string.Empty;
 
     [Required]
-    [Column("createddateutc")]
+    [Column("createddate")]
     public DateTime CreatedDate { get; set; }
 
     [Column("updatedby")]
     public string? UpdatedBy { get; set; }
 
-    [Column("updateddateutc")]
+    [Column("updateddate")]
     public DateTime? UpdatedDate { get; set; }
 }

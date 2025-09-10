@@ -1,4 +1,4 @@
-using Amazon;
+﻿using Amazon;
 using Amazon.DynamoDBv2;
 using Amazon.DynamoDBv2.Model;
 using Amazon.Lambda.Core;
@@ -403,6 +403,21 @@ public class Function
                     await MoveAndFinalizeRequestAsync(
                         sqsMessage,
                         UpdatException);
+
+                    var (delS3Object, DelS3Exception) = await DeleteS3ObjectAsync(Bucket ?? string.Empty, Key ?? string.Empty, systemname ?? string.Empty);
+
+                    if (!delS3Object)
+                    {
+                        WriteLog("AWS.S3.Delete.Failure", string.Format(sMsgFormat, $"S3 object deletion failed for Key={Key} in Bucket={Bucket}"), DelS3Exception);
+
+                        await MoveAndFinalizeRequestAsync(
+                        sqsMessage,
+                        DelS3Exception);
+                    }
+                    else
+                    {
+                        WriteLog("AWS.S3.Delete.Success", string.Format(sMsgFormat, $"S3 object deleted sucessful for Key={Key} in Bucket={Bucket}"));
+                    }
 
                     return;
                 }
@@ -1200,8 +1215,7 @@ public class Function
         using var tx = await db.Database.BeginTransactionAsync(ct);
         try
         {
-            var nowUnspec = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Unspecified);
-            //var nowUnspec = DateTime.SpecifyKind(GetCurrentEasternTime(), DateTimeKind.Unspecified);
+            var nowUnspec = DateTime.SpecifyKind(GetCurrentEasternTime(), DateTimeKind.Unspecified);
 
             // Fetch current INPROGRESS row (if still in primary table)
             var source = await db.TableAzureToAWSRequest
@@ -1348,6 +1362,57 @@ public class Function
         catch (Exception ex)
         {
             WriteLog("Status.Update.Exception", $"Stored proc failure CallDetailID={row.CallDetailID} Country={countryCode}", ex);
+            return (false, ex);
+        }
+    }
+
+    /// <summary>
+    /// Deletes an object from S3 (supports multi‑region via existing GetS3Client).
+    /// Treats a missing object (404) as success (idempotent delete).
+    /// </summary>
+    /// <param name="bucket">S3 bucket name.</param>
+    /// <param name="key">Full object key.</param>
+    /// <param name="systemname">
+    /// AWS region system name (e.g. "us-east-1", "ca-central-1") used to obtain / create the proper S3 client.
+    /// </param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>(Deleted success flag, Exception if any)</returns>
+    private async Task<(bool Deleted, Exception? exception)> DeleteS3ObjectAsync(
+        string bucket,
+        string key,
+        string systemname,
+        CancellationToken ct = default)
+    {
+        const string fmt = "DeleteS3ObjectAsync: {0}";
+
+        if (string.IsNullOrWhiteSpace(bucket) || string.IsNullOrWhiteSpace(key))
+        {
+            var ex = new ArgumentException("Bucket or Key is empty.");
+            WriteLog("S3.Delete.InvalidArgs", string.Format(fmt, "Bucket / Key invalid"), ex);
+            return (false, ex);
+        }
+
+        try
+        {
+            var resp = await GetS3Client(systemname).DeleteObjectAsync(new DeleteObjectRequest
+            {
+                BucketName = bucket,
+                Key = key
+            }, ct);
+
+            // DeleteObjectAsync returns 204 NoContent on success
+            WriteLog("S3.Delete.Success", string.Format(fmt, $"Deleted Bucket={bucket} Key={key} HttpStatus={resp.HttpStatusCode}"));
+            return (true, null);
+        }
+        catch (AmazonS3Exception s3ex) when (s3ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            // Idempotent – object already gone
+            WriteLog("S3.Delete.NotFound", string.Format(fmt, $"Object already absent Bucket={bucket} Key={key}"));
+            return (true, null);
+        }
+        catch (Exception ex)
+        {
+            WriteLog("S3.Delete.Failure", string.Format(fmt, $"Failed Bucket={bucket} Key={key}"), ex);
             return (false, ex);
         }
     }

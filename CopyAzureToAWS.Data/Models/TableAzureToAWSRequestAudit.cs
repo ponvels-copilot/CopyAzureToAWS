@@ -27,7 +27,7 @@ namespace CopyAzureToAWS.Data.Models
         public string? ErrorDescription { get; set; }
 
         [Required]
-        [Column("createddateutc")]
+        [Column("createddate")]
         public DateTime CreatedDate { get; set; }
 
         [Required]
@@ -38,7 +38,7 @@ namespace CopyAzureToAWS.Data.Models
         [Column("updatedby")]
         public string? UpdatedBy { get; set; }
 
-        [Column("updateddateutc")]
+        [Column("updateddate")]
         public DateTime? UpdatedDate { get; set; }
     }
 }
