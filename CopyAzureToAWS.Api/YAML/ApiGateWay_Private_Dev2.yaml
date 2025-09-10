@@ -38,6 +38,7 @@ Metadata:
       - Label:
           default: "S3 & DynamoDB Configuration"
         Parameters:
+          - CallRecordingsPrefix
           - USS3Bucket
           - CAS3Bucket
           - S3BucketLambda

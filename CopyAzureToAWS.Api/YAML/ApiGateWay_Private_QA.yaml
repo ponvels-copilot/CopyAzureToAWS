@@ -633,6 +633,7 @@ Resources:
                 Action:
                   - s3:GetObject
                   - s3:PutObject
+                  - S3:DeleteObject
                 Resource:
                   - !Sub arn:aws:s3:::${USS3Bucket}/${CallRecordingsPrefix}/*
                   - !Sub arn:aws:s3:::${CAS3Bucket}/${CallRecordingsPrefix}/*
