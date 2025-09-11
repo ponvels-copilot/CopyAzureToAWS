@@ -35,19 +35,22 @@ public class SqsService : ISqsService
 
     public async Task<(bool, Exception?)> SendMessageAsync(SqsMessage message)
     {
+        string sMsg = string.Empty;
+        string sMsgFormat = "SendMessageAsync: {0}";
+
         var requestId = string.IsNullOrWhiteSpace(message.RequestId)
             ? Guid.NewGuid().ToString()
             : message.RequestId;
 
         _logger.WriteLog(
             "Sqs.Send.Attempt",
-            $"Sending message to queue (FIFO={_isFifo}) CallDetailID={message.CallDetailID}",
+            string.Format(sMsgFormat, $"Sending message to queue (FIFO={_isFifo}) CallDetailID={message.CallDetailID}"),
             requestId);
 
         try
         {
             var payload = JsonSerializer.Serialize(message);
-            _logger.WriteLog("Sqs.Send.Payload", $"{payload}", requestId);
+            _logger.WriteLog("Sqs.Send.Payload", string.Format(sMsgFormat, $"{payload}"), requestId);
 
             var request = new SendMessageRequest
             {
@@ -67,14 +70,14 @@ public class SqsService : ISqsService
             {
                 _logger.WriteLog(
                     "Sqs.Send.Success",
-                    $"Message sent CallDetailID={message.CallDetailID} MessageId={response.MessageId}",
+                    string.Format(sMsgFormat, $"Message sent CallDetailID={message.CallDetailID} MessageId={response.MessageId}"),
                     requestId);
                 return (true, null);
             }
 
             _logger.WriteLog(
                 "Sqs.Send.NonOk",
-                $"Non-OK status {(int)response.HttpStatusCode} CallDetailID={message.CallDetailID}",
+                string.Format(sMsgFormat, $"Non-OK status {(int)response.HttpStatusCode} CallDetailID={message.CallDetailID}"),
                 requestId,
                 success: false);
             return (false, new Exception($"Non-OK status {(int)response.HttpStatusCode} CallDetailID={message.CallDetailID}"));
@@ -83,7 +86,7 @@ public class SqsService : ISqsService
         {
             _logger.WriteLog(
                 "Sqs.Send.Error",
-                $"Exception sending message CallDetailID={message.CallDetailID}",
+                string.Format(sMsgFormat, $"Exception sending message CallDetailID={message.CallDetailID}"),
                 requestId,
                 success: false,
                 exception: ex);

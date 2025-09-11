@@ -113,26 +113,27 @@ public class Function
 
     public Function()
     {
-        WriteLog("BuildVersion", $"{BuildVersion}");
+        string sMsgFormat = "Function: {0}";
+        WriteLog("BuildVersion", string.Format(sMsgFormat, $"{BuildVersion}"));
 
         if (VerboseLoggging)
         {
             //logging-in-the-aws-net-sdk
             //https://stackoverflow.com/questions/60435957/how-do-i-turn-on-verbose-logging-in-the-aws-net-sdk
             AWSConfigs.LoggingConfig.LogTo = LoggingOptions.Console;
-            WriteLog("VerboseLoggging", "SDK Debug logging is enabled");
+            WriteLog("VerboseLoggging", string.Format(sMsgFormat, "SDK Debug logging is enabled"));
         }
         else
-            WriteLog("VerboseLoggging", "SDK Debug logging is not enabled");
+            WriteLog("VerboseLoggging", string.Format(sMsgFormat, "SDK Debug logging is not enabled"));
 
         if (EnableXrayTrace)
         {
             //https://docs.aws.amazon.com/lambda/latest/dg/csharp-tracing.html
             AWSSDKHandler.RegisterXRayForAllServices();
-            WriteLog("EnableXrayTrace", "Intrumenting Lambda with x-ray is enabled");
+            WriteLog("EnableXrayTrace", string.Format(sMsgFormat, "Intrumenting Lambda with x-ray is enabled"));
         }
         else
-            WriteLog("EnableXrayTrace", "Intrumenting Lambda with x-ray is not enabled");
+            WriteLog("EnableXrayTrace", string.Format(sMsgFormat, "Intrumenting Lambda with x-ray is not enabled"));
 
         _s3Client = new AmazonS3Client();
         _sqsClient = new AmazonSQSClient();
@@ -145,7 +146,7 @@ public class Function
         });
         _dynamoDBClient = new AmazonDynamoDBClient();
 
-        WriteLog("Function-Init", "IAmazonS3, IAmazonSecretsManager, AmazonSQSClient and AmazonDynamoDBClient initialization completed - Function()");
+        WriteLog("Function-Init", string.Format(sMsgFormat, "IAmazonS3, IAmazonSecretsManager, AmazonSQSClient and AmazonDynamoDBClient initialization completed - Function()"));
     }
 
     public Function(IAmazonS3 _s3Client, IAmazonS3 _sqsClientCA, AmazonSQSClient _sqsClient, IAmazonSecretsManager _secretsManagerClient, AmazonDynamoDBClient _dynamoDBClient)
@@ -202,7 +203,7 @@ public class Function
             var sqsMessage = JsonConvert.DeserializeObject<SqsMessage>(message.Body);
             if (sqsMessage == null)
             {
-                sMsg = "Failed to deserialize SQS message";
+                sMsg = string.Format(sMsgFormat, "Failed to deserialize SQS message");
                 WriteLog("SQS.Message.Failed", sMsg, new Exception(sMsg));
                 return;
             }
@@ -393,14 +394,15 @@ public class Function
                 #endregion
 
                 var (updated, UpdatException) = await UpdateRecordingDetailsAsync(new UpdateCallRecordingDetails()
-                                                                                    {
-                                                                                        CallDetailID = callDetailsInfo.CallDetailID,
-                                                                                        AudioFile = callDetailsInfo.AudioFile!,
-                                                                                        AudioFileLocation = newaudiofilelocation,
-                                                                                        S3Md5 = S3Md5,
-                                                                                        S3SizeBytes = S3SizeBytes,
-                                                                                        Status = StatusCode.SUCCESS.ToString(),
-                                                                                    }, country);
+                {
+                    CallDetailID = callDetailsInfo.CallDetailID,
+                    AudioFile = callDetailsInfo.AudioFile!,
+                    AudioFileLocation = newaudiofilelocation,
+                    S3Md5 = S3Md5,
+                    S3SizeBytes = S3SizeBytes,
+                    Status = StatusCode.SUCCESS.ToString(),
+                    RequestId = RequestId,
+                }, country);
                 if (!updated)
                 {
                     sMsg = string.Format(sMsgFormat, $"Recording details update failed for CallDetailID={callDetailsInfo.CallDetailID}");
@@ -1033,7 +1035,7 @@ public class Function
         var prefix = $"{CallrecordingsPrefix}/{clientcode}/{dateTime:yyyy}/{dateTime:MM}/{dateTime:dd}/{dateTime:HH}/{dateTime:mm}";
         var key = $"{prefix}/{fileName}";
         var newaudiofilelocation = $"{bucket}/{prefix}";
-        WriteLog("S3 variables", "prefix: {prefix}\nkey: {key}\nnewaudiofilelocation:{newaudiofilelocation}");
+        WriteLog("S3 variables", string.Format(sMsgFormat, $"prefix: {prefix}\nkey: {key}\nnewaudiofilelocation:{newaudiofilelocation}"));
 
         if (string.IsNullOrWhiteSpace(key))
         {

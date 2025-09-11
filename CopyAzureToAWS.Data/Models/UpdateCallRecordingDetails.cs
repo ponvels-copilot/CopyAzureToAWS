@@ -16,5 +16,6 @@ namespace CopyAzureToAWS.Data.Models
         public long S3SizeBytes { get; set; }
         public string? Status { get; set; }
         public string? ErrorDescription { get; set; }
+        public string RequestId { get; set; } = string.Empty;
     }
 }

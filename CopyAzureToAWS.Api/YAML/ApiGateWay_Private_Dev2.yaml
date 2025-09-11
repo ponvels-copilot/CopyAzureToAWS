@@ -207,8 +207,8 @@ Parameters:
     Description: SubProject tag
   CallRecordingsPrefix:
     Type: String
-    Default: callrecordings
-    AllowedValues: [callrecordings]
+    Default: CallRecordings
+    AllowedValues: [CallRecordings]
     Description: S3 bucket for US region
   USS3Bucket:
     Type: String
@@ -459,7 +459,6 @@ Resources:
           SECRET_ID: !Sub copy-azure-to-aws/${Environment}/${SecretName}
           GetExtendedDataUsersCache: "dbo.fn_get_extended_data_users_cache|Reader"
           GetJwtTokenKey: "dbo.fn_get_jwt_token_key|Reader"
-          RecordAzureToAWSStatus: "dbo.usp_record_azure_to_aws_status|Writer"
           AWS__SQS__QueueUrl: !Ref CopyAzureToAWSRequestQueue
           Logging__LogLevel__Default: Information
           Logging__LogLevel__Microsoft: Information
