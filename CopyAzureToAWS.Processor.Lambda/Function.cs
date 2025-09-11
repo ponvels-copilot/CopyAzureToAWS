@@ -24,7 +24,6 @@ using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text.Json;
 
-
 // Assembly attribute to enable the Lambda function's JSON input to be converted into a .NET class.
 [assembly: LambdaSerializer(typeof(Amazon.Lambda.Serialization.SystemTextJson.DefaultLambdaJsonSerializer))]
 
@@ -32,6 +31,14 @@ namespace CopyAzureToAWS.Processor.Lambda;
 
 public class Function
 {
+    private static DateTime GetDateTimeInEST
+    {
+        get
+        {
+            return DateTime.SpecifyKind(GetCurrentEasternTime(), DateTimeKind.Unspecified);
+        }
+    }
+
     private enum StatusCode { INPROGRESS, SUCCESS, ERROR }
 
     private const string Const_arn = "arn";
@@ -345,7 +352,7 @@ public class Function
                 //if (string.IsNullOrEmpty(connectionString))
                 //{
                 //    string smsg = $"Database connection string not configured correctly for countrycode:{country} Writer";
-                //    WriteLog(string.Format(sMsgFormat, "Exception"), new Exception(smsg));
+                //    WriteLog($"{country}_Writer.Connectionstring.Empty", string.Format(sMsgFormat, "Exception"), new Exception(smsg));
                 //    await MoveAndFinalizeRequestAsync(
                 //    sqsMessage,
                 //    new Exception(smsg));
@@ -360,12 +367,12 @@ public class Function
 
                 //// Update call_recording_details with new S3 key (location), MD5 and size
                 //var (updated, UpdatException) = await UpdateRecordingDetailsAsync(
-                //    dbContextWriter,
-                //    callDetailsInfo.CallDetailID,
-                //    callDetailsInfo.AudioFile!,
-                //    newaudiofilelocation,
-                //    S3Md5,
-                //    S3SizeBytes);
+                //                                                                    dbContextWriter,
+                //                                                                    callDetailsInfo.CallDetailID,
+                //                                                                    callDetailsInfo.AudioFile!,
+                //                                                                    newaudiofilelocation,
+                //                                                                    S3Md5,
+                //                                                                    S3SizeBytes);
 
                 //if (!updated)
                 //{
@@ -386,15 +393,14 @@ public class Function
                 #endregion
 
                 var (updated, UpdatException) = await UpdateRecordingDetailsAsync(new UpdateCallRecordingDetails()
-                {
-                    CallDetailID = callDetailsInfo.CallDetailID,
-                    AudioFile = callDetailsInfo.AudioFile!,
-                    AudioFileLocation = newaudiofilelocation,
-                    S3Md5 = S3Md5,
-                    S3SizeBytes = S3SizeBytes,
-                    Status = StatusCode.SUCCESS.ToString(),
-                }, country);
-
+                                                                                    {
+                                                                                        CallDetailID = callDetailsInfo.CallDetailID,
+                                                                                        AudioFile = callDetailsInfo.AudioFile!,
+                                                                                        AudioFileLocation = newaudiofilelocation,
+                                                                                        S3Md5 = S3Md5,
+                                                                                        S3SizeBytes = S3SizeBytes,
+                                                                                        Status = StatusCode.SUCCESS.ToString(),
+                                                                                    }, country);
                 if (!updated)
                 {
                     sMsg = string.Format(sMsgFormat, $"Recording details update failed for CallDetailID={callDetailsInfo.CallDetailID}");
@@ -423,6 +429,8 @@ public class Function
                 }
                 else
                 {
+                    //This is required only if EF way of updating the CallRecordingDetails table is used.
+                    //Need to add metadata timestamp insert in this method.
                     //await MoveAndFinalizeRequestAsync(
                     //    sqsMessage,
                     //    null);
@@ -525,52 +533,52 @@ public class Function
     /// <returns>A tuple containing a boolean indicating success or failure, and an <see cref="Exception"/> if an error occurred.
     /// The boolean is <see langword="true"/> if the update was successful; otherwise, <see langword="false"/>. The
     /// exception is <see langword="null"/> if the operation succeeded.</returns>
-    private static async Task<(bool, Exception?)> UpdateRecordingDetailsAsync(
-        ApplicationDbContext db,
-        long callDetailId,
-        string audioFileName,
-        string newLocation,
-        string md5,
-        long sizeBytes,
-        CancellationToken ct = default)
-    {
-        string sMsg = string.Empty;
-        string sMsgFormat = "UpdateRecordingDetailsAsync: {0}";
+    //private static async Task<(bool, Exception?)> UpdateRecordingDetailsAsync(
+    //    ApplicationDbContext db,
+    //    long callDetailId,
+    //    string audioFileName,
+    //    string newLocation,
+    //    string md5,
+    //    long sizeBytes,
+    //    CancellationToken ct = default)
+    //{
+    //    string sMsg = string.Empty;
+    //    string sMsgFormat = "UpdateRecordingDetailsAsync: {0}";
 
-        try
-        {
-            var record = await db.TableCallRecordingDetails
-                .FirstOrDefaultAsync(r =>
-                        r.CallDetailID == callDetailId &&
-                        r.AudioFile != null &&
-                        r.AudioFile.ToLower() == audioFileName.ToLower() &&
-                        r.IsAzureCloudAudio == true,
-                    ct);
+    //    try
+    //    {
+    //        var record = await db.TableCallRecordingDetails
+    //            .FirstOrDefaultAsync(r =>
+    //                    r.CallDetailID == callDetailId &&
+    //                    r.AudioFile != null &&
+    //                    r.AudioFile.ToLower() == audioFileName.ToLower() &&
+    //                    r.IsAzureCloudAudio == true,
+    //                ct);
 
-            if (record == null)
-            {
-                sMsg = string.Format(sMsgFormat, $"Record not found CallDetailID={callDetailId} AudioFile={audioFileName}");
-                WriteLog("CallRecordingDetails.Update.No.Match", string.Format(sMsgFormat, "Exception"), new Exception(sMsg));
-                return (false, new Exception(sMsg));
-            }
+    //        if (record == null)
+    //        {
+    //            sMsg = string.Format(sMsgFormat, $"Record not found CallDetailID={callDetailId} AudioFile={audioFileName}");
+    //            WriteLog("CallRecordingDetails.Update.No.Match", string.Format(sMsgFormat, "Exception"), new Exception(sMsg));
+    //            return (false, new Exception(sMsg));
+    //        }
 
-            record.AudioFileLocation = newLocation;
-            record.AudioFileMd5Hash = md5;
-            record.AudioFileSize = sizeBytes;
-            record.AudioStorageID = null; // Reset to default storage
-            record.IsEncryptedAudio = null;
-            record.IsAzureCloudAudio = false; // Mark as no longer Azure
+    //        record.AudioFileLocation = newLocation;
+    //        record.AudioFileMd5Hash = md5;
+    //        record.AudioFileSize = sizeBytes;
+    //        record.AudioStorageID = null; // Reset to default storage
+    //        record.IsEncryptedAudio = null;
+    //        record.IsAzureCloudAudio = false; // Mark as no longer Azure
 
-            await db.SaveChangesAsync(ct);
-            WriteLog("CallRecordingDetails.Update.Details", string.Format(sMsgFormat, $"Updated CallDetailID={callDetailId} File={audioFileName} Size={sizeBytes} MD5={md5}"));
-            return (true, null);
-        }
-        catch (Exception ex)
-        {
-            WriteLog("CallRecordingDetails.Exception", string.Format(sMsgFormat, $"error CallDetailID={callDetailId}"), ex);
-            return (false, ex);
-        }
-    }
+    //        await db.SaveChangesAsync(ct);
+    //        WriteLog("CallRecordingDetails.Update.Details", string.Format(sMsgFormat, $"Updated CallDetailID={callDetailId} File={audioFileName} Size={sizeBytes} MD5={md5}"));
+    //        return (true, null);
+    //    }
+    //    catch (Exception ex)
+    //    {
+    //        WriteLog("CallRecordingDetails.Exception", string.Format(sMsgFormat, $"error CallDetailID={callDetailId}"), ex);
+    //        return (false, ex);
+    //    }
+    //}
 
     /// <summary>
     /// Retrieves the default Azure storage configuration from the database.
@@ -1215,8 +1223,6 @@ public class Function
         using var tx = await db.Database.BeginTransactionAsync(ct);
         try
         {
-            var nowUnspec = DateTime.SpecifyKind(GetCurrentEasternTime(), DateTimeKind.Unspecified);
-
             // Fetch current INPROGRESS row (if still in primary table)
             var source = await db.TableAzureToAWSRequest
                 .FirstOrDefaultAsync(r =>
@@ -1237,10 +1243,11 @@ public class Function
                     CallDetailID = source.CallDetailID,
                     AudioFile = source.AudioFile,
                     Status = source.Status,        // should be INPROGRESS
+                    RequestId = source.RequestId,
                     ErrorDescription = null,
                     CreatedDate = srcCreated,
                     CreatedBy = source.CreatedBy,
-                    UpdatedDate = nowUnspec,
+                    UpdatedDate = GetDateTimeInEST,
                     UpdatedBy = actor
                 };
                 await db.TableAzureToAWSRequestAudit.AddAsync(originalAudit, ct);
@@ -1259,8 +1266,9 @@ public class Function
                 CallDetailID = callDetailId,
                 AudioFile = audioFile,
                 Status = finalStatus,
+                RequestId = RequestId,
                 ErrorDescription = exception?.ToString(),
-                CreatedDate = nowUnspec,
+                CreatedDate = GetDateTimeInEST,
                 CreatedBy = actor
             };
             await db.TableAzureToAWSRequestAudit.AddAsync(finalAudit, ct);

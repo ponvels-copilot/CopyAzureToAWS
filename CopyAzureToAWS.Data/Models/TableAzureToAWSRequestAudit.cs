@@ -26,6 +26,9 @@ namespace CopyAzureToAWS.Data.Models
         [Column("errordescription")]
         public string? ErrorDescription { get; set; }
 
+        [Column("requestid")]
+        public string RequestId { get; set; } = string.Empty;
+
         [Required]
         [Column("createddate")]
         public DateTime CreatedDate { get; set; }

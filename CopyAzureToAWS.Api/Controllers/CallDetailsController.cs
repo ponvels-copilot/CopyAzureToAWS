@@ -1,8 +1,9 @@
 ﻿using CopyAzureToAWS.Api.Configuration;
-using CopyAzureToAWS.Api.Infrastructure.Logging; // <-- added
+using CopyAzureToAWS.Api.Infrastructure.Logging;
 using CopyAzureToAWS.Api.Services;
 using CopyAzureToAWS.Data;
 using CopyAzureToAWS.Data.DTOs;
+using CopyAzureToAWS.Data.Models;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -10,6 +11,7 @@ using Newtonsoft.Json;
 using Npgsql;
 using NpgsqlTypes;
 using System.Net;
+using System.Runtime.InteropServices;
 
 namespace CopyAzureToAWS.Api.Controllers;
 
@@ -18,12 +20,22 @@ namespace CopyAzureToAWS.Api.Controllers;
 [Authorize]
 public class CallDetailsController : ControllerBase
 {
+    private const string CreatedBy = "API.CallDetailsController";
+
     private new enum StatusCode { INPROGRESS, SUCCESS, ERROR }
 
     private readonly ISqsService _sqsService;
     private readonly IUserAccessService _userAccessService;
     private readonly IConnectionStringResolver _connResolver;
     private readonly ILogger<CallDetailsController> _logger;
+
+    public DateTime GetDateTimeInEST
+    {
+        get
+        {
+            return DateTime.SpecifyKind(GetCurrentEasternTime(), DateTimeKind.Unspecified);
+        }
+    }
 
     public CallDetailsController(
         ISqsService sqsService,
@@ -135,21 +147,23 @@ public class CallDetailsController : ControllerBase
                     });
             }
 
-            var row = new TableAzureToAWSRequest
+            var rowInProgress = new TableAzureToAWSRequest
             {
                 CallDetailID = request.CallDetailID,
                 AudioFile = request.AudioFile,
                 Status = StatusCode.INPROGRESS.ToString(),
-                CreatedBy = "API",
-                CreatedDate = DateTime.UtcNow
+                RequestId = requestId,
+                ErrorDescription = null,
+                CreatedBy = CreatedBy,
+                CreatedDate = GetDateTimeInEST
             };
 
             _logger.WriteLog("CallDetails.Status.Write", $"Recording {StatusCode.INPROGRESS} status. CallDetailID={request.CallDetailID}", requestId);
-            // Stored proc write (connection resolved by user access service – must also be country aware)
-            var recorded = await RecordAzureToAWSStatus(row, country);
-            if (!recorded)
+
+            var (inserted, insertErr) = await AddAzureToAWSRequestAsync(rowInProgress, country);
+            if (!inserted)
             {
-                _logger.WriteLog("CallDetails.Status.WriteFailed",
+                _logger.WriteLog("AzureToAWS.Status.WriteFailed",
                     $"Failed to persist status CallDetailID={request.CallDetailID}",
                     requestId,
                     success: false);
@@ -159,7 +173,7 @@ public class CallDetailsController : ControllerBase
                     {
                         IsSuccess = false,
                         StatusCode = (int)HttpStatusCode.InternalServerError,
-                        Message = $"Failed to record status for CallDetailID {request.CallDetailID}",
+                        Message = $"Failed to record status for CallDetailID {request.CallDetailID} with {StatusCode.INPROGRESS}",
                         RequestId = requestId
                     });
             }
@@ -183,12 +197,15 @@ public class CallDetailsController : ControllerBase
                     CallDetailID = request.CallDetailID,
                     AudioFile = request.AudioFile,
                     Status = StatusCode.ERROR.ToString(),
-                    ErrorDescription = sqsexception!.ToString()
+                    RequestId = requestId,
+                    ErrorDescription = sqsexception!.ToString(),
+                    CreatedDate = GetDateTimeInEST,
+                    CreatedBy = CreatedBy
                 };
 
                 _logger.WriteLog("CallDetails.Status.Write", $"Recording {StatusCode.ERROR} status. CallDetailID={request.CallDetailID}", requestId);
                 // Stored proc write (connection resolved by user access service – must also be country aware)
-                recorded = await RecordAzureToAWSStatus(row_ERROR, country);
+                var (recorded, recordedExp) = await AddAzureToAWSRequestAsync(row_ERROR, country);
                 if (!recorded)
                 {
                     _logger.WriteLog("CallDetails.Status.WriteFailed",
@@ -297,6 +314,174 @@ public class CallDetailsController : ControllerBase
                 exception: ex);
             return false;
         }
+    }
+
+    /// <summary>
+    /// Adds or updates an Azure-to-AWS request in the database based on the provided details.
+    /// </summary>
+    /// <remarks>This method ensures that only one "INPROGRESS" request exists for a given call detail ID and
+    /// audio file. If the request status is "INPROGRESS" and a duplicate exists, the operation fails. Otherwise, the
+    /// method either inserts a new request or moves an existing "INPROGRESS" request to an audit table before inserting
+    /// the new request.</remarks>
+    /// <param name="row">The request details to be added or updated, including the call detail ID, audio file, and status.</param>
+    /// <param name="countryCode">The country code used to determine the database connection. If null or whitespace, defaults to "US".</param>
+    /// <param name="ct">A cancellation token that can be used to cancel the operation.</param>
+    /// <returns>A tuple containing a boolean indicating success and an exception if the operation fails. If the operation is
+    /// successful, <c>Success</c> is <see langword="true"/> and <c>StatusFailed</c> is <see langword="null"/>. If the
+    /// operation fails, <c>Success</c> is <see langword="false"/> and <c>StatusFailed</c> contains the exception
+    /// describing the failure.</returns>
+    private async Task<(bool Success, Exception? StatusFailed)> AddAzureToAWSRequestAsync(TableAzureToAWSRequest row, string countryCode, CancellationToken ct = default)
+    {
+        var requestId = HttpContext.ResolveRequestId();
+        const string logCtx = "AzureToAWS.AddRequest";
+        try
+        {
+            if (row.CallDetailID <= 0)
+                return (false, new Exception("CallDetailID must be > 0"));
+
+            if (string.IsNullOrWhiteSpace(row.AudioFile))
+                return (false, new Exception("AudioFile is required"));
+
+            var normCountry = string.IsNullOrWhiteSpace(countryCode)
+                ? "US"
+                : countryCode.Trim().ToUpperInvariant();
+
+            var writerCs = _connResolver.GetWriter(normCountry);
+            var opts = new DbContextOptionsBuilder<ApplicationDbContext>()
+                .UseNpgsql(writerCs)
+                .EnableSensitiveDataLogging(false)
+                .Options;
+
+            await using var db = new ApplicationDbContext(opts);
+
+            var loweredAudio = row.AudioFile.Trim().ToLowerInvariant();
+            var isInProgressRequest = row.Status.Equals(StatusCode.INPROGRESS.ToString(), StringComparison.OrdinalIgnoreCase);
+
+            // Load existing (if any) for this CallDetailID (we only store one row per CallDetailID)
+            var existing = await db.TableAzureToAWSRequest
+                .FirstOrDefaultAsync(r => r.CallDetailID == row.CallDetailID && r.AudioFile.ToLower() == loweredAudio, ct);
+
+            if (isInProgressRequest)
+            {
+                if (existing != null)
+                {
+                    _logger.WriteLog($"{logCtx}.Duplicate",
+                        $"INPROGRESS already exists CallDetailID={row.CallDetailID} AudioFile='{row.AudioFile}'",
+                        requestId,
+                        success: false);
+                    return (false, new Exception("Request already exists"));
+                }
+
+                await db.TableAzureToAWSRequest.AddAsync(row, ct);
+                await db.SaveChangesAsync(ct);
+
+                _logger.WriteLog($"{logCtx}.Success",
+                    $"Inserted INPROGRESS CallDetailID={row.CallDetailID} AudioFile='{row.AudioFile}'",
+                    requestId);
+                return (true, null);
+            }
+            else
+            {
+                using var tx = await db.Database.BeginTransactionAsync(ct);
+
+                // Copy existing to audit
+                var audit = new TableAzureToAWSRequestAudit
+                {
+                    CallDetailID = existing.CallDetailID,
+                    AudioFile = existing.AudioFile,
+                    Status = existing.Status,
+                    RequestId = existing.RequestId,
+                    ErrorDescription = existing.ErrorDescription,
+                    CreatedDate = existing.CreatedDate,
+                    CreatedBy = existing.CreatedBy,
+                    UpdatedDate = GetDateTimeInEST,
+                    UpdatedBy = CreatedBy
+                };
+                await db.TableAzureToAWSRequestAudit.AddAsync(audit, ct);
+
+                // Remove existing INPROGRESS row
+                db.TableAzureToAWSRequest.Remove(existing);
+
+                // Insert new final (e.g., ERROR) row
+                audit = new TableAzureToAWSRequestAudit
+                {
+                    CallDetailID = row.CallDetailID,
+                    AudioFile = row.AudioFile,
+                    Status = row.Status,
+                    RequestId = row.RequestId,
+                    ErrorDescription = row.ErrorDescription,
+                    CreatedDate = row.CreatedDate,
+                    CreatedBy = row.CreatedBy
+                };
+
+                await db.TableAzureToAWSRequestAudit.AddAsync(audit, ct);
+
+                await db.SaveChangesAsync(ct);
+                await tx.CommitAsync(ct);
+
+                _logger.WriteLog($"{logCtx}.InProgressMoved",
+                    $"Moved INPROGRESS to audit and inserted {row.Status.ToString()} CallDetailID={row.CallDetailID}",
+                    requestId);
+
+                return (true, null);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.WriteLog($"{logCtx}.Exception",
+                $"Insert failed CallDetailID={row.CallDetailID} AudioFile='{row.AudioFile}'",
+                requestId,
+                success: false,
+                exception: ex);
+            return (false, ex);
+        }
+    }
+
+    // Cached Eastern TimeZoneInfo (handles Windows vs Linux). Falls back to fixed -05:00 if not found.
+    private static readonly Lazy<TimeZoneInfo> _easternTimeZone = new(() =>
+    {
+        try
+        {
+            // Windows uses "Eastern Standard Time"; Linux/AL2 uses IANA "America/New_York"
+            var id = RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
+                ? "Eastern Standard Time"
+                : "America/New_York";
+            return TimeZoneInfo.FindSystemTimeZoneById(id);
+        }
+        catch (TimeZoneNotFoundException)
+        {
+            return TimeZoneInfo.CreateCustomTimeZone("EST", TimeSpan.FromHours(-5), "Eastern Standard Time", "Eastern Standard Time");
+        }
+        catch (InvalidTimeZoneException)
+        {
+            return TimeZoneInfo.CreateCustomTimeZone("EST", TimeSpan.FromHours(-5), "Eastern Standard Time", "Eastern Standard Time");
+        }
+    });
+    // Replace this line:
+    // string const Actor = "CallDetailsController";
+
+    /// <summary>
+    /// Returns the current Eastern Time (America/New_York) as a DateTime with Kind=Unspecified.
+    /// Includes DST (EDT) when in effect. Use only if you truly must store local ET.
+    /// Prefer storing UTC plus a separate zone indicator when possible.
+    /// </summary>
+    public static DateTime GetCurrentEasternTime()
+    {
+        var eastern = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, _easternTimeZone.Value);
+        // Mark Unspecified to avoid misleading consumers into thinking it is UTC or local server time.
+        return DateTime.SpecifyKind(eastern, DateTimeKind.Unspecified);
+    }
+
+    /// <summary>
+    /// Returns the current Eastern Time as a DateTimeOffset preserving the correct UTC offset (-05:00 or -04:00).
+    /// Prefer this when you need an absolute point in time + local offset.
+    /// </summary>
+    public static DateTimeOffset GetCurrentEasternTimeOffset()
+    {
+        var tz = _easternTimeZone.Value;
+        var utcNow = DateTime.UtcNow;
+        var offset = tz.GetUtcOffset(utcNow);
+        return new DateTimeOffset(utcNow).ToOffset(offset);
     }
 
     [HttpGet("db-resolve")]

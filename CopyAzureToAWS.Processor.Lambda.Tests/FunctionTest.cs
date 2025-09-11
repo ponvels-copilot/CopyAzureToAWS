@@ -7,6 +7,7 @@ using Amazon.Runtime.CredentialManagement;
 using Amazon.S3;
 using Amazon.SecretsManager;
 using Amazon.SQS;
+using CopyAzureToAWS.Data.DTOs;
 using Xunit;
 
 namespace CopyAzureToAWS.Processor.Lambda.Tests;
@@ -24,24 +25,25 @@ public class FunctionTest
     {
         SetEnvironmentVariables();
 
+        SqsMessage? message = new()
+        {
+            CountryCode = "US",
+            CallDetailID = 2324590048,
+            AudioFile = "US_90970614_47483773_Audio_Cisco.Testagenta1_20150707124626.wav",
+            RequestId = "80ebc503-d5de-4071-a496-73b5ef317250"
+        };
+
         var sqsEvent = new SQSEvent
         {
             Records =
             [
-                // new() {
-                //    Body = "{\r\n\t\t\"CountryCode\": \"US\",\r\n\t\t\"CallDetailID\": 2405431524,\r\n\t\t\"AudioFile\": \"US_377590203_2804080_Audio_r_xavier.ware_20220303115400.wav\",\r\n\t\t\"RequestId\": \"RequestId\"\r\n\t}"
-                //}
+                
                 //new() {
-                //    Body = "{\r\n\t\t\"CountryCode\": \"CA\",\r\n\t\t\"CallDetailID\": 272265144,\r\n\t\t\"AudioFile\": \"CA_33564779_47483650_Audio_Test.agent1_20240917090832.wav\",\r\n\t\t\"RequestId\": \"RequestId\"\r\n\t}"
+                //    Body = "{\r\n\t\t\"CountryCode\": \"US\",\r\n\t\t\"CallDetailID\": 2324590048,\r\n\t\t\"AudioFile\": \"\",\r\n\t\t\"RequestId\": \"0cefbd47-abe8-4058-95b9-3b31213bc18a\"\r\n\t}"
                 //}
-                //new() {
-                //    Body = "{\r\n\t\t\"CountryCode\": \"CA\",\r\n\t\t\"CallDetailID\": 272266265,\r\n\t\t\"AudioFile\": \"CA_50340018_578156338_Audio_cisco.testagenta1_20250522141324.wav\",\r\n\t\t\"RequestId\": \"RequestId\"\r\n\t}"
-                //}
-                //new() {
-                //    Body = "{\r\n\t\t\"CountryCode\": \"CA\",\r\n\t\t\"CallDetailID\": 272266249,\r\n\t\t\"AudioFile\": \"CA_50340010_578156338_Audio_Cisco.testagenta1_20250519115207.wav\",\r\n\t\t\"RequestId\": \"RequestId\"\r\n\t}"
-                //}
+
                 new() {
-                    Body = "{\r\n\t\t\"CountryCode\": \"US\",\r\n\t\t\"CallDetailID\": 2778983569,\r\n\t\t\"AudioFile\": \"US_16__Audio_Jamescarlo.Dugay_20181110185059.wav\",\r\n\t\t\"RequestId\": \"0cefbd47-abe8-4058-95b9-3b31213bc18a\"\r\n\t}"
+                    Body = System.Text.Json.JsonSerializer.Serialize(message)
                 }
             ]
         };
@@ -113,7 +115,7 @@ public class FunctionTest
     {
         Environment.SetEnvironmentVariable("SecretsManagerTimeOutInSeconds", "10");
         Environment.SetEnvironmentVariable("TableClientCountryKMSMap", "clientcountrykmsmap");
-        Environment.SetEnvironmentVariable("RECORD_AZURE_TO_AWS_STATUS", "dbo.usp_record_azure_to_aws_status|Writer");
+        //Environment.SetEnvironmentVariable("RECORD_AZURE_TO_AWS_STATUS", "dbo.usp_record_azure_to_aws_status|Writer");
 
         //Dev2 AWS Instance
         Environment.SetEnvironmentVariable("SECRET_ID", "copy-azure-to-aws/dev/azure_to_aws_1");

@@ -16,11 +16,12 @@ public class TableAzureToAWSRequest
     [Column("status")]
     public string Status { get; set; } = string.Empty;
 
+    [Column("requestid")]
+    public string RequestId { get; set; } = string.Empty;
+
     [Column("errordescription")]
     public string? ErrorDescription { get; set; }
 
-    //[Column("requestid")]
-    //public string RequestId { get; set; } = string.Empty;
 
     //[Column("countrycode")]
     //public string CountryCode { get; set; } = string.Empty;
