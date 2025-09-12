@@ -13,6 +13,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CopyAzureToAWS.Processor.La
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CopyAzureToAWS.Processor.Lambda.Tests", "CopyAzureToAWS.Processor.Lambda.Tests\CopyAzureToAWS.Processor.Lambda.Tests.csproj", "{7EA8070E-F6B4-2C57-D3FE-735F004BD880}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CopyAzureToAWS.AzureRecordingLoadTest", "CopyAzureToAWS.AzureRecordingLoadTest\CopyAzureToAWS.AzureRecordingLoadTest.csproj", "{22C1DE53-9D8B-88CB-9C3A-064E4FB5A41B}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -39,6 +41,10 @@ Global
 		{7EA8070E-F6B4-2C57-D3FE-735F004BD880}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{7EA8070E-F6B4-2C57-D3FE-735F004BD880}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{7EA8070E-F6B4-2C57-D3FE-735F004BD880}.Release|Any CPU.Build.0 = Release|Any CPU
+		{22C1DE53-9D8B-88CB-9C3A-064E4FB5A41B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{22C1DE53-9D8B-88CB-9C3A-064E4FB5A41B}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{22C1DE53-9D8B-88CB-9C3A-064E4FB5A41B}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{22C1DE53-9D8B-88CB-9C3A-064E4FB5A41B}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
