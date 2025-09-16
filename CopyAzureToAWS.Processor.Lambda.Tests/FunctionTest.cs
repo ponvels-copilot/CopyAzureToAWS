@@ -115,6 +115,7 @@ public class FunctionTest
     {
         Environment.SetEnvironmentVariable("SecretsManagerTimeOutInSeconds", "10");
         Environment.SetEnvironmentVariable("TableClientCountryKMSMap", "clientcountrykmsmap");
+        Environment.SetEnvironmentVariable("TableClientCountryKMSCreateRequest", "clientcountrykmscreaterequest");
         //Environment.SetEnvironmentVariable("RECORD_AZURE_TO_AWS_STATUS", "dbo.usp_record_azure_to_aws_status|Writer");
 
         //Dev2 AWS Instance
@@ -122,11 +123,13 @@ public class FunctionTest
         Environment.SetEnvironmentVariable("USS3BucketName", "awsuse1dev2stqatch01");
         Environment.SetEnvironmentVariable("CAS3BucketName", "awscac1dev2stqatch01");
         Environment.SetEnvironmentVariable("CallrecordingsPrefix", "callrecordings");
+        Environment.SetEnvironmentVariable("QUEUE_URL", "callrecordings");
 
         //QA AWS Instance
         //Environment.SetEnvironmentVariable("SECRET_ID", "copy-azure-to-aws/qa/azure_to_aws_1");
         //Environment.SetEnvironmentVariable("USS3BucketName", "awsuse1qas3qatch01");
         //Environment.SetEnvironmentVariable("CAS3BucketName", "awscac1qas3qatch01");
         //Environment.SetEnvironmentVariable("CallrecordingsPrefix", "CallRecordings");
+        //Environment.SetEnvironmentVariable("QUEUE_URL", "CallRecordings");
     }
 }

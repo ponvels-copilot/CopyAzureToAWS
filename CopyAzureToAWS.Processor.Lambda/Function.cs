@@ -8,6 +8,7 @@ using Amazon.S3.Model;
 using Amazon.SecretsManager;
 using Amazon.SecretsManager.Model;
 using Amazon.SQS;
+using Amazon.SQS.Model;
 using Amazon.XRay.Recorder.Handlers.AwsSdk;
 using Azure.Core;
 using CopyAzureToAWS.Common.Utilities;
@@ -39,7 +40,7 @@ public class Function
         }
     }
 
-    private enum StatusCode { INPROGRESS, SUCCESS, ERROR }
+    private enum StatusCode { INPROGRESS, SUCCESS, ERROR, KMSKEYWAIT }
 
     private const string Const_arn = "arn";
     private const string Const_alias = "alias";
@@ -47,6 +48,8 @@ public class Function
     private const string Const_systemname = "systemname";
 
     private const string Const_programcode = "programcode";
+    private const string Const_countrycode = "countrycode";
+    private const string Const_createddate = "createddate";
 
     private IAmazonS3? _s3Client;
     private IAmazonS3? _s3ClientCanada;
@@ -57,11 +60,13 @@ public class Function
     private readonly string secretId = Environment.GetEnvironmentVariable("SECRET_ID")!;
     private readonly int SecretsManagerTimeOutInSeconds = int.TryParse(Environment.GetEnvironmentVariable("SecretsManagerTimeOutInSeconds"), out var timeout) ? timeout : 30;
     private readonly string TableClientCountryKMSMap = Environment.GetEnvironmentVariable("TableClientCountryKMSMap")!;
+    private readonly string TableClientCountryKMSCreateRequest = Environment.GetEnvironmentVariable("TableClientCountryKMSCreateRequest")!;
     private readonly string RECORD_AZURE_TO_AWS_STATUS = Environment.GetEnvironmentVariable("RECORD_AZURE_TO_AWS_STATUS")!;
     private readonly string USS3BucketName = Environment.GetEnvironmentVariable("USS3BucketName")!;
     private readonly string CAS3BucketName = Environment.GetEnvironmentVariable("CAS3BucketName")!;
     private readonly string CallrecordingsPrefix = Environment.GetEnvironmentVariable("CallrecordingsPrefix")!;
     private readonly int CommandTimeout = int.TryParse(Environment.GetEnvironmentVariable("CommandTimeout"), out var timeout) ? timeout : 300;
+    private readonly int KmsKeyRetryDelayInMinutes = int.TryParse(Environment.GetEnvironmentVariable("KmsKeyRetryDelayInMinutes"), out var timeout) ? timeout : 60;
 
     private static string RequestId = string.Empty;
     private static string Key = string.Empty;
@@ -111,6 +116,7 @@ public class Function
 
     private static readonly ConcurrentDictionary<string, (string Arn, string Alias, string ClientCode, string SystemName)> _kmsCache = new(StringComparer.OrdinalIgnoreCase);
 
+    private TimeSpan KmsKeyRetryDelay;
     public Function()
     {
         string sMsgFormat = "Function: {0}";
@@ -146,6 +152,8 @@ public class Function
         });
         _dynamoDBClient = new AmazonDynamoDBClient();
 
+        KmsKeyRetryDelay = TimeSpan.FromMinutes(KmsKeyRetryDelayInMinutes);
+
         WriteLog("Function-Init", string.Format(sMsgFormat, "IAmazonS3, IAmazonSecretsManager, AmazonSQSClient and AmazonDynamoDBClient initialization completed - Function()"));
     }
 
@@ -157,6 +165,8 @@ public class Function
         this._dynamoDBClient = _dynamoDBClient;
         this._sqsClient = _sqsClient;
 
+        KmsKeyRetryDelay = TimeSpan.FromMinutes(KmsKeyRetryDelayInMinutes);
+
         WriteLog("Function-Init", "IAmazonS3, IAmazonSecretsManager, AmazonSQSClient and AmazonDynamoDBClient initialization completed - Function(parameter)");
     }
 
@@ -165,12 +175,30 @@ public class Function
     /// </summary>
     /// <param name="evnt">SQS event containing messages</param>
     /// <returns>Task</returns>
-    public async Task FunctionHandler(SQSEvent evnt)
+    public async Task<SQSBatchResponse> FunctionHandler(SQSEvent evnt)
     {
-        foreach (var message in evnt.Records)
+        var failures = new List<SQSBatchResponse.BatchItemFailure>();
+
+        foreach (var record in evnt.Records)
         {
-            await ProcessMessage(message);
+            try
+            {
+                await ProcessMessage(record);
+            }
+            catch (Exception ex)
+            {
+                WriteLog("Process.Failure", $"Unhandled error MessageId={record.MessageId}", ex);
+                failures.Add(new SQSBatchResponse.BatchItemFailure
+                {
+                    ItemIdentifier = record.MessageId
+                });
+            }
         }
+
+        return new SQSBatchResponse
+        {
+            BatchItemFailures = failures
+        };
     }
 
     /// <summary>
@@ -312,14 +340,67 @@ public class Function
             var (kmsArn, kmsAlias, clientcode, systemname, exceptionkmskey) = await GetKmsKeyForProgramAsync(callDetailsInfo.ProgramCode);
             if (string.IsNullOrWhiteSpace(kmsArn) || exceptionkmskey is not null)
             {
-                sMsg = string.Format(sMsgFormat, $"Failed to retrieve KMS key for program: {callDetailsInfo.ProgramCode} from dynamodb table: {TableClientCountryKMSMap}.");
-                WriteLog("KMS.Program.NoMap", sMsg, exceptionkmskey);
+                // Decide whether to defer or give up
+                var queueUrl = Environment.GetEnvironmentVariable("QUEUE_URL"); // add this env variable in template
+                if (string.IsNullOrWhiteSpace(queueUrl))
+                {
+                    // Cannot defer without queue URL: fall back to current finalize logic
+                    WriteLog("KMS.Program.NoMap",
+                        string.Format(sMsgFormat, $"KMS key missing and QUEUE_URL not set; finalizing CallDetailID={callDetailsInfo.CallDetailID}"),
+                        exceptionkmskey);
 
-                await MoveAndFinalizeRequestAsync(
-                    sqsMessage,
-                    exceptionkmskey);
+                    await MoveAndFinalizeRequestAsync(sqsMessage, exceptionkmskey);
+                    return;
+                }
 
-                return;
+                // How many times we have tried already
+                int attempt = 1;
+                if (message.Attributes != null &&
+                    message.Attributes.TryGetValue("ApproximateReceiveCount", out var countStr) &&
+                    int.TryParse(countStr, out var parsed))
+                {
+                    attempt = parsed;
+                }
+
+                if (attempt > MaxKmsKeyDeferrals)
+                {
+                    // Too many deferrals – finalize as ERROR
+                    WriteLog("KMS.Program.NoMap.Finalize",
+                        string.Format(sMsgFormat, $"Exceeded deferrals (attempt={attempt}) for Program={callDetailsInfo.ProgramCode}; finalizing"),
+                        exceptionkmskey);
+
+                    await MoveAndFinalizeRequestAsync(sqsMessage, exceptionkmskey ?? new Exception("KMS key unavailable after deferrals"));
+
+                    //Need to throws exception to mark the message as failed in the batch and not delete it. so that it will appear in DLQ
+                    throw new InvalidOperationException(
+                        $"KMS key not created after {attempt - 1} deferrals for ProgramCode={callDetailsInfo.ProgramCode}");
+                }
+
+                //Post the request for KMS Key creation if not exists
+                var (posted, postException) = await EnsureKmsCreateRequestAsync(callDetailsInfo.ProgramCode!);
+                if (!posted)
+                {
+                    WriteLog("KMS.Program.CreateRequest.Failed",
+                        string.Format(sMsgFormat, $"Failed to post KMS create request for Program={callDetailsInfo.ProgramCode}"),
+                        postException);
+                    await MoveAndFinalizeRequestAsync(sqsMessage, postException);
+                    return;
+                }
+                else
+                {
+                    //MOVE THE INPROGRESS TO KMSKEYWAIT
+                    await MoveAndFinalizeRequestAsync(sqsMessage, postException, true);
+
+                    WriteLog("KMS.Program.CreateRequest.Posted",
+                        string.Format(sMsgFormat, $"Posted KMS create request for Program={callDetailsInfo.ProgramCode}"));
+                }
+
+                // Defer (extend visibility) and rethrow to trigger Lambda partial failure logic
+                await DeferMessageForKmsAsync(message, queueUrl, KmsKeyRetryDelay);
+                WriteLog("KMS.Program.Deferred",
+                    string.Format(sMsgFormat, $"Deferred message for Program={callDetailsInfo.ProgramCode} attempt={attempt} next in ~{KmsKeyRetryDelay.TotalMinutes}m"));
+
+                throw new Exception($"KMS key not ready for program {callDetailsInfo.ProgramCode}; deferred");
             }
 
             var (AzureStream, AzureException) = await GetAzureStreamAsync(callDetailsInfo, storageConfig);
@@ -378,7 +459,7 @@ public class Function
                 //if (!updated)
                 //{
                 //    sMsg = string.Format(sMsgFormat, $"Recording details update failed for CallDetailID={callDetailsInfo.CallDetailID}");
-                //    WriteLog(string.Format(sMsgFormat, "Exception"), new Exception(sMsg));
+                //    WriteLog(sMsg, new Exception(sMsg));
 
                 //    await MoveAndFinalizeRequestAsync(
                 //        sqsMessage,
@@ -466,6 +547,7 @@ public class Function
         catch (Exception ex)
         {
             WriteLog("Process.Failure", string.Format(sMsgFormat, $"Error processing message(MessageId): {message.MessageId}"), ex);
+            throw; // ensure partial failure gets registered
         }
     }
 
@@ -560,7 +642,7 @@ public class Function
     //        if (record == null)
     //        {
     //            sMsg = string.Format(sMsgFormat, $"Record not found CallDetailID={callDetailId} AudioFile={audioFileName}");
-    //            WriteLog("CallRecordingDetails.Update.No.Match", string.Format(sMsgFormat, "Exception"), new Exception(sMsg));
+    //            WriteLog("CallRecordingDetails.Update.No.Match", sMsg, new Exception(sMsg));
     //            return (false, new Exception(sMsg));
     //        }
 
@@ -739,15 +821,17 @@ public class Function
         // If not configured, log to console and abort (fallback: no DB access later).
         if (string.IsNullOrWhiteSpace(secretId))
         {
-            WriteLog("SecretID.Empty", string.Format(sMsgFormat, "Exception"), new Exception("SECRET_ID not set"));
-            return (false, new Exception("Secret Id environment variable is missing"));
+            sMsg = string.Format(sMsgFormat, "SECRET_ID environment variable is not set.");
+            WriteLog("SecretID.Empty", sMsg, new Exception(sMsg));
+            return (false, new Exception(sMsg));
         }
 
         // If the Secrets Manager client was not constructed (should not normally happen) abort.
         if (_secretsManagerClient == null)
         {
-            WriteLog("Secret.Client.Not.Init", string.Format(sMsgFormat, "Exception"), new Exception("Secrets Manager client not initialized."));
-            return (false, new Exception("Secret Manager Client is not initialized"));
+            sMsg = string.Format(sMsgFormat, "Secrets Manager client is not initialized.");
+            WriteLog("Secret.Client.Not.Init", sMsg, new Exception(sMsg));
+            return (false, new Exception(sMsg));
         }
 
         try
@@ -762,7 +846,7 @@ public class Function
             if (string.IsNullOrWhiteSpace(resp.SecretString))
             {
                 sMsg = string.Format(sMsgFormat, $"SecretId: '{secretId}'. Secret string is empty.");
-                WriteLog("Secret.Empty", string.Format(sMsgFormat, "Exception"), new Exception(sMsg));
+                WriteLog("Secret.Empty", sMsg, new Exception(sMsg));
 
                 return (false, new Exception(sMsg));
             }
@@ -885,13 +969,7 @@ public class Function
     /// retrieved item, the method logs an  error and returns an exception. </para></remarks>
     /// <param name="programCode">The program code used to query the KMS key mapping. Cannot be null, empty, or whitespace.</param>
     /// <param name="ct">A cancellation token that can be used to cancel the operation. Optional.</param>
-    /// <returns>A tuple containing the following elements: <list type="bullet"> <item><description>The ARN of the KMS key, or
-    /// <see langword="null"/> if not found.</description></item> <item><description>The alias of the KMS key, or <see
-    /// langword="null"/> if not found.</description></item> <item><description>The client code associated with the
-    /// program, or <see langword="null"/> if not found.</description></item> <item><description>The system name
-    /// associated with the program, or <see langword="null"/> if not found.</description></item> <item><description>An
-    /// exception if an error occurred, or <see langword="null"/> if the operation was successful.</description></item>
-    /// </list></returns>
+    /// <returns>A tuple containing the ARN of the KMS key, alias, client code, system name, and an exception if any.</returns>
     private async Task<(string? Arn, string? Alias, string? ClientCode, string? SystemName, Exception? exception)> GetKmsKeyForProgramAsync(
         string? programCode,
         CancellationToken ct = default)
@@ -907,14 +985,14 @@ public class Function
         if (string.IsNullOrWhiteSpace(TableClientCountryKMSMap))
         {
             sMsg = string.Format(sMsgFormat, $"DynamoDB table name (TableClientCountryKMSMap) not configured in environment variables.");
-            WriteLog("DynamoDB.Table.Missing", string.Format(sMsgFormat, "Exception"), new Exception(sMsg));
+            WriteLog("DynamoDB.Table.Missing", sMsg, new Exception(sMsg));
             return (null, null, null, null, new Exception(sMsg));
         }
 
         if (_dynamoDBClient == null)
         {
             sMsg = string.Format(sMsgFormat, $"DynamoDB client not initialized.");
-            WriteLog("DynamoDB.Client.NotInit", string.Format(sMsgFormat, "Exception"), new Exception(sMsg));
+            WriteLog("DynamoDB.Client.NotInit", sMsg, new Exception(sMsg));
             return (null, null, null, null, new Exception(sMsg));
         }
 
@@ -942,7 +1020,7 @@ public class Function
             if (item == null)
             {
                 sMsg = string.Format(sMsgFormat, $"No mapping for programcode: {programCode} found in dynamodb table: {TableClientCountryKMSMap}.");
-                WriteLog("DynamoDB.KMS.Program.NoMap", string.Format(sMsgFormat, "Exception"), new Exception(sMsg));
+                WriteLog("DynamoDB.KMS.Program.NoMap", sMsg, new Exception(sMsg));
                 return (null, null, null, null, new Exception(sMsg));
             }
 
@@ -965,7 +1043,7 @@ public class Function
             else
             {
                 sMsg = string.Format(sMsgFormat, $"Mapping for programcode: {programCode} missing KmsKeyArn attribute in dynamodb table: {TableClientCountryKMSMap}.");
-                WriteLog("DynamoDB.KMS.Program.NoMap", string.Format(sMsgFormat, "Exception"), new Exception(sMsg));
+                WriteLog("DynamoDB.KMS.Program.NoMap", sMsg, new Exception(sMsg));
                 return (null, null, null, null, new Exception(sMsg));
             }
         }
@@ -1007,14 +1085,14 @@ public class Function
         if (_s3Client == null)
         {
             sMsg = string.Format(sMsgFormat, "S3 client not initialized");
-            WriteLog("S3.Client.NotInit", string.Format(sMsgFormat, "Exception"), new Exception(sMsg));
+            WriteLog("S3.Client.NotInit", sMsg, new Exception(sMsg));
             return (null, null, string.Empty, string.Empty, string.Empty, 0, new Exception(sMsg));
         }
 
         if (azureStream == null || !azureStream.CanRead)
         {
             sMsg = string.Format(sMsgFormat, "Azure stream is invalid");
-            WriteLog("Azure.Stream.Invalid", string.Format(sMsgFormat, "Exception"), new Exception(sMsg));
+            WriteLog("Azure.Stream.Invalid", sMsg, new Exception(sMsg));
             return (null, null, string.Empty, string.Empty, string.Empty, 0, new Exception(sMsg));
         }
 
@@ -1027,7 +1105,7 @@ public class Function
         if (string.IsNullOrWhiteSpace(bucket))
         {
             sMsg = string.Format(sMsgFormat, "Resolved bucket name empty (check env USS3BucketName / CAS3BucketName)");
-            WriteLog("S3.Bucket.Empty", string.Format(sMsgFormat, "Exception"), new Exception(sMsg));
+            WriteLog("S3.Bucket.Empty", sMsg, new Exception(sMsg));
             return (bucket, null, string.Empty, string.Empty, string.Empty, 0, new Exception(sMsg));
         }
 
@@ -1040,7 +1118,7 @@ public class Function
         if (string.IsNullOrWhiteSpace(key))
         {
             sMsg = string.Format(sMsgFormat, "unable to frame the key (s3 prefix)");
-            WriteLog("S3.Key.Empty", string.Format(sMsgFormat, "Exception"), new Exception(sMsg));
+            WriteLog("S3.Key.Empty", sMsg, new Exception(sMsg));
             return (bucket, null, newaudiofilelocation, string.Empty, string.Empty, 0, new Exception(sMsg));
         }
 
@@ -1071,7 +1149,7 @@ public class Function
             if (putResp.HttpStatusCode != System.Net.HttpStatusCode.OK)
             {
                 sMsg = string.Format(sMsgFormat, $"PutObject non-OK: {putResp.HttpStatusCode}");
-                WriteLog("S3.PutObject.Fail", string.Format(sMsgFormat, "Exception"), new Exception(sMsg));
+                WriteLog("S3.PutObject.Fail", sMsg, new Exception(sMsg));
                 return (bucket, key, newaudiofilelocation, azureMd5Hex, "", 0, new Exception(sMsg));
             }
 
@@ -1092,7 +1170,7 @@ public class Function
             if (!match)
             {
                 sMsg = string.Format(sMsgFormat, $"MD5 mismatch Azure={azureMd5Hex} S3={s3Md5Hex} Bucket={bucket} Key={key}");
-                WriteLog("S3.Md5.Fail", string.Format(sMsgFormat, "Exception"), new Exception(sMsg));
+                WriteLog("S3.Md5.Fail", sMsg, new Exception(sMsg));
                 return (bucket, key, newaudiofilelocation, azureMd5Hex, s3Md5Hex, s3Size, new Exception(sMsg));
             }
 
@@ -1199,6 +1277,7 @@ public class Function
     private static async Task<bool> MoveAndFinalizeRequestAsync(
         SqsMessage sqsMessage,
         Exception? exception,
+        bool kmskeywait = false,
         CancellationToken ct = default)
     {
         string sMsg = string.Empty;
@@ -1213,7 +1292,7 @@ public class Function
         if (string.IsNullOrEmpty(connectionString))
         {
             sMsg = string.Format(sMsgFormat, $"Database connection string not configured correctly for countrycode:{countryCode} Writer");
-            WriteLog("Status_Update_Conn_Empty", string.Format(sMsgFormat, "Exception"), new Exception(sMsg));
+            WriteLog("Status_Update_Conn_Empty", sMsg, new Exception(sMsg));
             return false;
         }
 
@@ -1221,7 +1300,6 @@ public class Function
         optionsBuilder.UseNpgsql(connectionString);
         using var db = new ApplicationDbContext(optionsBuilder.Options);
 
-        string finalStatus = (exception == null ? StatusCode.SUCCESS.ToString() : StatusCode.ERROR.ToString());
         using var tx = await db.Database.BeginTransactionAsync(ct);
         try
         {
@@ -1244,7 +1322,7 @@ public class Function
                 {
                     CallDetailID = source.CallDetailID,
                     AudioFile = source.AudioFile,
-                    Status = source.Status,        // should be INPROGRESS
+                    Status = source.Status,        // should be INPROGRESS OR KMSKEYWAIT
                     RequestId = source.RequestId,
                     ErrorDescription = null,
                     CreatedDate = srcCreated,
@@ -1262,23 +1340,43 @@ public class Function
                 WriteLog("CallDetailid.Moved", string.Format(sMsgFormat, $"Source row already moved (CallDetailID={callDetailId})."));
             }
 
-            // Insert final status row
-            var finalAudit = new TableAzureToAWSRequestAudit
+            if (kmskeywait)
             {
-                CallDetailID = callDetailId,
-                AudioFile = audioFile,
-                Status = finalStatus,
-                RequestId = RequestId,
-                ErrorDescription = exception?.ToString(),
-                CreatedDate = GetDateTimeInEST,
-                CreatedBy = actor
-            };
-            await db.TableAzureToAWSRequestAudit.AddAsync(finalAudit, ct);
+                // Insert final status row as KMSKEYWAIT
+                var newrecord = new TableAzureToAWSRequest
+                {
+                    CallDetailID = callDetailId,
+                    AudioFile = audioFile,
+                    Status = StatusCode.KMSKEYWAIT.ToString(),
+                    RequestId = RequestId,
+                    ErrorDescription = exception?.ToString(),
+                    CreatedDate = GetDateTimeInEST,
+                    CreatedBy = actor
+                };
+                await db.TableAzureToAWSRequest.AddAsync(newrecord, ct);
+                WriteLog($"Status_Update_{StatusCode.KMSKEYWAIT}", string.Format(sMsgFormat, $"status '{StatusCode.KMSKEYWAIT}' recorded CallDetailID={callDetailId}."));
+            }
+            else
+            {
+                string finalStatus = (exception == null ? StatusCode.SUCCESS.ToString() : StatusCode.ERROR.ToString());
+                // Insert final status row
+                var finalAudit = new TableAzureToAWSRequestAudit
+                {
+                    CallDetailID = callDetailId,
+                    AudioFile = audioFile,
+                    Status = finalStatus,
+                    RequestId = RequestId,
+                    ErrorDescription = exception?.ToString(),
+                    CreatedDate = GetDateTimeInEST,
+                    CreatedBy = actor
+                };
+                await db.TableAzureToAWSRequestAudit.AddAsync(finalAudit, ct);
+                WriteLog($"Status_Update_{finalStatus}", string.Format(sMsgFormat, $"Final status '{finalStatus}' recorded CallDetailID={callDetailId}."));
+            }
 
             await db.SaveChangesAsync(ct);
             await tx.CommitAsync(ct);
-
-            WriteLog("Status_Update_Success", string.Format(sMsgFormat, $"Final status '{finalStatus}' recorded CallDetailID={callDetailId}."));
+            
             return true;
         }
         catch (Exception ex)
@@ -1423,6 +1521,109 @@ public class Function
         catch (Exception ex)
         {
             WriteLog("S3.Delete.Failure", string.Format(fmt, $"Failed Bucket={bucket} Key={key}"), ex);
+            return (false, ex);
+        }
+    }
+
+    private const int MaxKmsKeyDeferrals = 4; // after 4 attempts (≈4h) give up and finalize as ERROR
+
+    /// <summary>
+    /// Defers the processing of the message to allow for the KMS key to become available.
+    /// </summary>
+    /// <param name="record">The SQS message to process.</param>
+    /// <param name="queueUrl">The URL of the SQS queue.</param>
+    /// <param name="delay">The delay duration.</param>
+    /// <param name="ct">The cancellation token.</param>
+    /// <returns>A task that represents the asynchronous operation.</returns>
+    private async Task DeferMessageForKmsAsync(SQSEvent.SQSMessage record, string queueUrl, TimeSpan delay, CancellationToken ct = default)
+    {
+        if (_sqsClient == null) return;
+
+        var seconds = (int)delay.TotalSeconds;
+        if (seconds < 0) seconds = 0;
+        if (seconds > 43200) seconds = 43200; // SQS limit 12h
+
+        await _sqsClient.ChangeMessageVisibilityAsync(new ChangeMessageVisibilityRequest
+        {
+            QueueUrl = queueUrl,
+            ReceiptHandle = record.ReceiptHandle,
+            VisibilityTimeout = seconds
+        }, ct);
+
+        WriteLog("SQS.Visibility.Extended",
+            $"Deferred message MessageId={record.MessageId} for {seconds} seconds (KMS key not ready)");
+    }
+
+    // ADD METHOD (place near other DynamoDB helpers, e.g. under GetKmsKeyForProgramAsync)
+    private async Task<(bool ExistsOrCreated, Exception? exception)> EnsureKmsCreateRequestAsync(
+        string programCode,
+        CancellationToken ct = default)
+    {
+        string ctx = "KMS.CreateRequest";
+        try
+        {
+            if (string.IsNullOrWhiteSpace(programCode))
+                return (false, new ArgumentException("programCode empty"));
+
+            if (string.IsNullOrWhiteSpace(TableClientCountryKMSCreateRequest))
+            {
+                WriteLog($"{ctx}.TableMissing", $"Env var TableClientCountryKMSCreateRequest not set – skipping create request.");
+                return (false, new Exception("TableClientCountryKMSCreateRequest not configured"));
+            }
+
+            if (_dynamoDBClient == null)
+                return (false, new Exception("DynamoDB client not initialized"));
+
+            string clientCode = programCode.Substring(0, 3);
+            string countryCode = programCode.Substring(4, 2);
+
+            // 1. Query for existing
+            var query = new QueryRequest
+            {
+                TableName = TableClientCountryKMSCreateRequest,
+                KeyConditionExpression = $"{Const_programcode} = :pc",
+                ExpressionAttributeValues = new Dictionary<string, AttributeValue>
+                {
+                    [":pc"] = new AttributeValue { S = programCode }
+                },
+                Limit = 1,
+                ConsistentRead = false
+            };
+
+            var qResp = await _dynamoDBClient.QueryAsync(query, ct);
+            if (qResp.Count > 0)
+            {
+                WriteLog($"{ctx}.Exists", $"programcode={programCode} already present.");
+                return (true, null);
+            }
+
+            // 2. Attempt conditional put
+            var put = new PutItemRequest
+            {
+                TableName = TableClientCountryKMSCreateRequest,
+                Item = new Dictionary<string, AttributeValue>
+                {
+                    [Const_programcode] = new AttributeValue { S = programCode },
+                    [Const_clientcode] = new AttributeValue { S = clientCode ?? string.Empty },
+                    [Const_countrycode] = new AttributeValue { S = (countryCode ?? string.Empty).ToUpperInvariant() },
+                    [Const_createddate] = new AttributeValue { S = GetDateTimeInEST.ToString() }
+                },
+                ConditionExpression = "attribute_not_exists(programcode)"
+            };
+
+            await _dynamoDBClient.PutItemAsync(put, ct);
+            WriteLog($"{ctx}.Inserted", $"Create request inserted programcode={programCode} country={countryCode}");
+            return (true, null);
+        }
+        catch (ConditionalCheckFailedException)
+        {
+            // Lost race; treat as success
+            WriteLog($"{ctx}.RaceWinOther", $"Another writer inserted programcode={programCode} concurrently.");
+            return (true, null);
+        }
+        catch (Exception ex)
+        {
+            WriteLog($"{ctx}.Exception", $"Failed ensuring create request programcode={programCode}", ex);
             return (false, ex);
         }
     }

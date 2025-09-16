@@ -43,6 +43,7 @@ Metadata:
           - CAS3Bucket
           - S3BucketLambda
           - TableClientCountryKMSMap
+          - TableClientCountryKMSCreateRequest
       - Label:
           default: "Rest API Configuration"
         Parameters:
@@ -230,6 +231,11 @@ Parameters:
     Default: clientcountrykmsmap
     AllowedValues: [clientcountrykmsmap]
     Description: DynamoDB table name for client country KMS mapping
+  TableClientCountryKMSCreateRequest:
+    Type: String
+    Default: clientcountrykmscreaterequest
+    AllowedValues: [clientcountrykmscreaterequest]
+    Description: DynamoDB table name to hold the client country KMS create requests
   ApiCustomDomainName:
     Type: String
     Description: Existing API Gateway custom domain name to map (must already exist)
@@ -597,6 +603,13 @@ Resources:
                   - dynamodb:Query
                   - dynamodb:DescribeTable
                 Resource: !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TableClientCountryKMSMap}
+              - Sid: DynamoKmsCreateRequestRW
+                Effect: Allow
+                Action:
+                  - dynamodb:Query
+                  - dynamodb:PutItem
+                  - dynamodb:DescribeTable
+                Resource: !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TableClientCountryKMSCreateRequest}
               # Multi-region KMS usage for S3 object encryption/decryption
               - Sid: KmsSseS3Use
                 Effect: Allow
@@ -676,10 +689,13 @@ Resources:
           SECRET_ID: !Sub copy-azure-to-aws/${Environment}/${SecretName}
           SecretsManagerTimeOutInSeconds: 30
           TableClientCountryKMSMap: !Ref TableClientCountryKMSMap
+          TableClientCountryKMSCreateRequest: !Ref TableClientCountryKMSCreateRequest
           USS3BucketName: !Ref USS3Bucket
           CAS3BucketName: !Ref CAS3Bucket
           RECORD_AZURE_TO_AWS_STATUS: dbo.usp_record_azure_to_aws_status|Writer
           CallrecordingsPrefix: !Ref CallRecordingsPrefix
+          QUEUE_URL: !Ref CopyAzureToAWSRequestQueue
+          KmsKeyRetryDelayInMinutes: 5
       Events:
         CopyQueueEvent:
           Type: SQS
@@ -687,7 +703,10 @@ Resources:
             Queue: !GetAtt CopyAzureToAWSRequestQueue.Arn
             BatchSize: 1
             MaximumBatchingWindowInSeconds: 0
+            FunctionResponseTypes:
+              - ReportBatchItemFailures
             Enabled: true
+
       Tags:
         Project: !Ref Project
         SubProject: !Ref SubProject
