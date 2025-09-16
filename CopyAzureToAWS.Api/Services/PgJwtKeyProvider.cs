@@ -2,9 +2,9 @@ using System.Text;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.IdentityModel.Tokens;
 using Npgsql;
-using CopyAzureToAWS.Api.Infrastructure;
+using AzureToAWS.Api.Infrastructure;
 
-namespace CopyAzureToAWS.Api.Services;
+namespace AzureToAWS.Api.Services;
 
 public interface IJwtKeyProvider
 {

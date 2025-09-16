@@ -1,8 +1,8 @@
-using CopyAzureToAWS.Api.Configuration;
-using CopyAzureToAWS.Data;
+using AzureToAWS.Api.Configuration;
+using AzureToAWS.Data;
 using Microsoft.EntityFrameworkCore;
 
-namespace CopyAzureToAWS.Api.Infrastructure
+namespace AzureToAWS.Api.Infrastructure
 {
     public interface ICountryDbContextFactory
     {

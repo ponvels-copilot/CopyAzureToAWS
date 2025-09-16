@@ -1,4 +1,4 @@
-namespace CopyAzureToAWS.Api.Configuration;
+namespace AzureToAWS.Api.Configuration;
 
 public class SqsOptions
 {

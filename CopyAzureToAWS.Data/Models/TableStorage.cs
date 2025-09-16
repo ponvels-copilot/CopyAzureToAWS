@@ -2,7 +2,7 @@ using System;
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 
-namespace CopyAzureToAWS.Data.Models;
+namespace AzureToAWS.Data.Models;
 
 [Table("storage", Schema = "dbo")]
 public class TableStorage

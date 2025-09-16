@@ -2,7 +2,7 @@
 using System.Text.Json;
 using System.Text;
 
-namespace CopyAzureToAWS.Common.Utilities
+namespace AzureToAWS.Common.Utilities
 {
     public class Aes256CbcEncrypter
     {

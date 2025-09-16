@@ -1,6 +1,6 @@
 using Microsoft.Extensions.Configuration;
 
-namespace CopyAzureToAWS.Api.Infrastructure;
+namespace AzureToAWS.Api.Infrastructure;
 
 public static class DbConfigHelper
 {

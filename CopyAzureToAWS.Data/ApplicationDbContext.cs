@@ -1,7 +1,7 @@
-using CopyAzureToAWS.Data.Models;
+using AzureToAWS.Data.Models;
 using Microsoft.EntityFrameworkCore;
 
-namespace CopyAzureToAWS.Data;
+namespace AzureToAWS.Data;
 
 public class ApplicationDbContext : DbContext
 {

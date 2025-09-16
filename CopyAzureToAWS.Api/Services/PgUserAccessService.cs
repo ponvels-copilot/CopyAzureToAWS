@@ -1,12 +1,12 @@
-using CopyAzureToAWS.Api.Infrastructure;
-using CopyAzureToAWS.Data.DTOs;
+using AzureToAWS.Api.Infrastructure;
+using AzureToAWS.Data.DTOs;
 using Microsoft.Extensions.Caching.Memory;
 using Newtonsoft.Json;
 using Npgsql;
 using NpgsqlTypes;
 using System.Data;
 
-namespace CopyAzureToAWS.Api.Services;
+namespace AzureToAWS.Api.Services;
 
 public interface IUserAccessService
 {

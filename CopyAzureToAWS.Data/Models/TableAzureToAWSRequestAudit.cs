@@ -3,7 +3,7 @@ using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 using Microsoft.EntityFrameworkCore;
 
-namespace CopyAzureToAWS.Data.Models
+namespace AzureToAWS.Data.Models
 {
     [Keyless]
     [Table("azure_to_aws_request", Schema = "audit")]

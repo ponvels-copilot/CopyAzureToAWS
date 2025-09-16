@@ -1,4 +1,4 @@
-namespace CopyAzureToAWS.Api.Secrets
+namespace AzureToAWS.Api.Secrets
 {
     // Matches the JSON stored in Secrets Manager:
     // {

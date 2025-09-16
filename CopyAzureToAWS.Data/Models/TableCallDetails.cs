@@ -2,7 +2,7 @@ using System;
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 
-namespace CopyAzureToAWS.Data.Models;
+namespace AzureToAWS.Data.Models;
 
 [Table("call_details", Schema = "dbo")]
 public class TableCallDetails

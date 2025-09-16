@@ -1,9 +1,9 @@
 using Amazon.Extensions.NETCore.Setup;
 using Amazon.SQS;
-using CopyAzureToAWS.Api.Configuration;
-using CopyAzureToAWS.Api.Services;
+using AzureToAWS.Api.Configuration;
+using AzureToAWS.Api.Services;
 
-namespace CopyAzureToAWS.Api;
+namespace AzureToAWS.Api;
 
 public static class ServiceRegistration
 {

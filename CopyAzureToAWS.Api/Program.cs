@@ -1,9 +1,9 @@
 using Amazon.SQS;
-using CopyAzureToAWS.Api;
-using CopyAzureToAWS.Api.Configuration;
-using CopyAzureToAWS.Api.Infrastructure.Logging;
-using CopyAzureToAWS.Api.Services;
-using CopyAzureToAWS.Data;
+using AzureToAWS.Api;
+using AzureToAWS.Api.Configuration;
+using AzureToAWS.Api.Infrastructure.Logging;
+using AzureToAWS.Api.Services;
+using AzureToAWS.Data;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
@@ -68,7 +68,7 @@ using (var sp = builder.Services.BuildServiceProvider())
 }
 
 var logger = builder.Logging.Services.BuildServiceProvider().GetRequiredService<ILogger<Program>>();
-//logger.WriteLog("Version", $"Starting CopyAzureToAWS.Api version:", "TEST", true);
+//logger.WriteLog("Version", $"Starting AzureToAWS.Api version:", "TEST", true);
 Console.WriteLine("VERSION:1.0.0.0");
 
 var app = builder.Build();

@@ -2,7 +2,7 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using Microsoft.IdentityModel.Tokens;
 
-namespace CopyAzureToAWS.Api.Services;
+namespace AzureToAWS.Api.Services;
 
 public interface ITokenService
 {

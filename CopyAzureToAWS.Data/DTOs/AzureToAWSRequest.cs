@@ -1,6 +1,6 @@
 using System.ComponentModel.DataAnnotations;
 
-namespace CopyAzureToAWS.Data.DTOs;
+namespace AzureToAWS.Data.DTOs;
 
 public class AzureToAWSRequest
 {

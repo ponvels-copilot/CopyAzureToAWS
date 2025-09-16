@@ -29,7 +29,7 @@
 		<PackageReference Include="Npgsql" Version="9.0.3" />
 	</ItemGroup>
 	<ItemGroup>
-		<ProjectReference Include="..\CopyAzureToAWS.Common.Utilities\CopyAzureToAWS.Common.Utilities.csproj" />
-		<ProjectReference Include="..\CopyAzureToAWS.Data\CopyAzureToAWS.Data.csproj" />
+		<ProjectReference Include="..\CopyAzureToAWS.Common.Utilities\AzureToAWS.Common.Utilities.csproj" />
+		<ProjectReference Include="..\CopyAzureToAWS.Data\AzureToAWS.Data.csproj" />
 	</ItemGroup>
 </Project>

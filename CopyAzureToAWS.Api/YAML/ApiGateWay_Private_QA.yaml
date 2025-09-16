@@ -1,7 +1,7 @@
 #stk-azure-to-aws-restapi-private
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
-Description: CopyAzureToAWS API - REST API Private
+Description: AzureToAWS API - REST API Private
 
 Metadata:
   AWS::CloudFormation::Interface:
@@ -43,6 +43,7 @@ Metadata:
           - CAS3Bucket
           - S3BucketLambda
           - TableClientCountryKMSMap
+          - TableClientCountryKMSCreateRequest
       - Label:
           default: "Rest API Configuration"
         Parameters:
@@ -107,7 +108,7 @@ Metadata:
       # S3Bucket:
       #   default: "S3 bucket where the lambda packages resides"
       # LambdaS3TriggerKey:
-      #   default: "S3 bucket prefix to copy the lambda binary packages"
+      #   default: "S3 bucket prefix to the lambda binary packages"
       # ExistingRoleArn:
       #   default: "Existing Role to be associated in the given lambda"
       # QatchS3Bucket:
@@ -115,7 +116,7 @@ Metadata:
       # TriggerBucket:
       #   default: "S3 bucket name for the trigger to be configured for Lambda for new Metadata JSON"
       # S3Key:
-      #   default: "S3 bucket prefix to copy the lambda binary packages for SQS Lambda"
+      #   default: "S3 bucket prefix to the lambda binary packages for SQS Lambda"
       # SQSLambdaExistingRoleArn:
       #   default: "Existing ARN Role for SQS Lambda"
       # QatchTokenEndpoint:
@@ -200,7 +201,7 @@ Parameters:
   Description:
     Description: Description Info.
     Type: String
-    Default: "Copy Azure to AWS REST API"
+    Default: "Azure to AWS REST API"
   SubProject:
     Type: String
     Default: Azure to AWS
@@ -230,6 +231,11 @@ Parameters:
     Default: clientcountrykmsmap
     AllowedValues: [clientcountrykmsmap]
     Description: DynamoDB table name for client country KMS mapping
+  TableClientCountryKMSCreateRequest:
+    Type: String
+    Default: clientcountrykmscreaterequest
+    AllowedValues: [clientcountrykmscreaterequest]
+    Description: DynamoDB table name to hold the client country KMS create requests
   ApiCustomDomainName:
     Type: String
     Description: Existing API Gateway custom domain name to map (must already exist)
@@ -253,7 +259,7 @@ Globals:
   Function:
     Runtime: dotnet8
     MemorySize: 1024
-    Timeout: 30
+    Timeout: 300
     Tracing: Active  # Lambda X-Ray tracing
 
 Resources:
@@ -266,7 +272,7 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Retain
     Properties:
-      Name: !Sub copy-azure-to-aws/${Environment}/${SecretName}
+      Name: !Sub azure-to-aws/${Environment}/${SecretName}
       Description: !Sub "Azure to AWS Rest Api for ${Environment} environment"
       SecretString: !Sub |
         {
@@ -323,9 +329,9 @@ Resources:
   RestApiPrivate:
     Type: AWS::Serverless::Api
     Properties:
-      Name: copy-azure-to-aws-rest-private
+      Name: azure-to-aws-rest-private
       Description: >
-        Private VPC Endpoint–restricted REST API for CopyAzureToAWS.
+        Private VPC Endpoint–restricted REST API for AzureToAWS.
         Accepts requests, validates call recording metadata, enqueues SQS
         copy jobs, and exposes health/status endpoints with X-Ray tracing
         and structured access logging enabled.
@@ -356,7 +362,7 @@ Resources:
       DefinitionBody:
         openapi: 3.0.1
         info:
-          title: copy-azure-to-aws-rest-private
+          title: azure-to-aws-rest-private
           version: '1.0'
         paths:
           /:
@@ -379,7 +385,7 @@ Resources:
                 uri:
                   Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${WebApiFunction.Arn}/invocations
       Tags:
-        Name: copy-azure-to-aws-rest-private
+        Name: azure-to-aws-rest-private
         Description: !Ref Description
         Environment: !Ref Environment
         Client: !Ref Client
@@ -396,7 +402,7 @@ Resources:
     Type: AWS::IAM::Role
     Properties:
       RoleName: !Sub webapi-fn-role-${AWS::StackName}
-      Description: Execution role for WebApiFunction (Copy Azure to AWS API)
+      Description: Execution role for WebApiFunction (Azure to AWS API)
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -415,7 +421,7 @@ Resources:
               - Sid: SendToPrimaryQueue
                 Effect: Allow
                 Action: sqs:SendMessage
-                Resource: !GetAtt CopyAzureToAWSRequestQueue.Arn
+                Resource: !GetAtt AzureToAWSRequestQueue.Arn
               - Sid: ReadSecret
                 Effect: Allow
                 Action:
@@ -443,27 +449,27 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      FunctionName: copy-azure-to-aws-api-private
+      FunctionName: awsuse1azuretoaws01-api-private
       Description: Handles REST API requests; validates input and enqueues copy jobs to SQS.
       Role: !GetAtt WebApiFunctionRole.Arn
       CodeUri:
         Bucket: !Ref S3BucketLambda
-        Key: lambdas/Azure_to_AWS/CopyAzureToAWS.Api.zip
-      Handler: CopyAzureToAWS.Api::CopyAzureToAWS.Api.LambdaEntryPoint::FunctionHandlerAsync
+        Key: lambdas/Azure_to_AWS/AzureToAWS.Api_1.2.0.0.zip
+      Handler: AzureToAWS.Api::AzureToAWS.Api.LambdaEntryPoint::FunctionHandlerAsync
       Runtime: dotnet8
       VpcConfig:
         SecurityGroupIds: !Ref SecurityGroupIds
         SubnetIds: !Ref SubnetIds
       Environment:
         Variables:
-          SECRET_ID: !Sub copy-azure-to-aws/${Environment}/${SecretName}
+          SECRET_ID: !Sub azure-to-aws/${Environment}/${SecretName}
           GetExtendedDataUsersCache: "dbo.fn_get_extended_data_users_cache|Reader"
           GetJwtTokenKey: "dbo.fn_get_jwt_token_key|Reader"
-          AWS__SQS__QueueUrl: !Ref CopyAzureToAWSRequestQueue
+          AWS__SQS__QueueUrl: !Ref AzureToAWSRequestQueue
           Logging__LogLevel__Default: Information
           Logging__LogLevel__Microsoft: Information
           Logging__LogLevel__Microsoft_AspNetCore: Information
-          Logging__LogLevel__CopyAzureToAWS: Information
+          Logging__LogLevel__AzureToAWS: Information
       Events:
         ApiRoot:
             Type: Api
@@ -510,51 +516,64 @@ Resources:
       RetentionInDays: 90
 
   ##########################################################################
+  # Dedicated log group with retention for WebApiFunction
+  ##########################################################################
+  ProcessorFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete          # remove log group too (optional)
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${ProcessorFunction}
+      RetentionInDays: 90
+      
+  ##########################################################################
   # Access log destination for API Gateway stage
   ##########################################################################
   RestApiAccessLogs:
     Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete          # remove log group too (optional)
+    UpdateReplacePolicy: Delete
     Properties:
       LogGroupName: !Sub /aws/apigateway/${RestApiPrivate}
       RetentionInDays: 90
 
   ###########################################################################
-  # NEW: Dead-letter FIFO queue for failed copy requests
+  # NEW: Dead-letter FIFO queue for failed requests
   ###########################################################################
-  CopyAzureToAWSRequestQueueDLQ:
+  AzureToAWSRequestQueueDLQ:
     Type: AWS::SQS::Queue
     DeletionPolicy: Delete           # <-- ensure removal on stack delete
     UpdateReplacePolicy: Delete      # <-- ensure old queue deleted if replaced
     Properties:
-      QueueName: copy-azure-to-aws-request-dlq.fifo
+      QueueName: azure-to-aws-request-dlq.fifo
       FifoQueue: true
       ContentBasedDeduplication: true
       MessageRetentionPeriod: 1209600
 
   ###########################################################################
-  # NEW: Primary FIFO queue for copy requests
+  # NEW: Primary FIFO queue for requests
   ###########################################################################
-  CopyAzureToAWSRequestQueue:
+  AzureToAWSRequestQueue:
     Type: AWS::SQS::Queue
     DeletionPolicy: Delete           # <-- ensure removal on stack delete
     UpdateReplacePolicy: Delete      # <-- ensure old queue deleted if replaced
     Properties:
-      QueueName: copy-azure-to-aws-request.fifo
+      QueueName: azure-to-aws-request.fifo
       FifoQueue: true
       ContentBasedDeduplication: true
       VisibilityTimeout: 180
       RedrivePolicy:
-        deadLetterTargetArn: !GetAtt CopyAzureToAWSRequestQueueDLQ.Arn
+        deadLetterTargetArn: !GetAtt AzureToAWSRequestQueueDLQ.Arn
         maxReceiveCount: 5
 
   ###########################################################################
   # NEW: Processor Lambda consuming the primary queue
   ###########################################################################
-  CopyProcessorFunctionRole:
+  ProcessorFunctionRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub copyprocessor-fn-role-${AWS::StackName}
-      Description: Execution role for CopyProcessorFunction (Copy Azure to AWS Processor)
+      RoleName: !Sub processor-fn-role-${AWS::StackName}
+      Description: Execution role for ProcessorFunction (Azure to AWS Processor)
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -566,7 +585,7 @@ Resources:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
         - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
       Policies:
-        - PolicyName: CopyProcessorInlineAccess
+        - PolicyName: ProcessorInlineAccess
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
@@ -577,14 +596,14 @@ Resources:
                   - sqs:DeleteMessage
                   - sqs:GetQueueAttributes
                   - sqs:ChangeMessageVisibility
-                Resource: !GetAtt CopyAzureToAWSRequestQueue.Arn
+                Resource: !GetAtt AzureToAWSRequestQueue.Arn
               - Sid: SqsDlqRead
                 Effect: Allow
                 Action:
                   - sqs:GetQueueAttributes
                   - sqs:ReceiveMessage
                   - sqs:DeleteMessage
-                Resource: !GetAtt CopyAzureToAWSRequestQueueDLQ.Arn
+                Resource: !GetAtt AzureToAWSRequestQueueDLQ.Arn
               - Sid: SecretsRead
                 Effect: Allow
                 Action:
@@ -597,6 +616,13 @@ Resources:
                   - dynamodb:Query
                   - dynamodb:DescribeTable
                 Resource: !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TableClientCountryKMSMap}
+              - Sid: DynamoKmsCreateRequestRW
+                Effect: Allow
+                Action:
+                  - dynamodb:Query
+                  - dynamodb:PutItem
+                  - dynamodb:DescribeTable
+                Resource: !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TableClientCountryKMSCreateRequest}
               # Multi-region KMS usage for S3 object encryption/decryption
               - Sid: KmsSseS3Use
                 Effect: Allow
@@ -606,8 +632,8 @@ Resources:
                   - kms:Encrypt
                   - kms:DescribeKey
                 Resource:
-                  - arn:aws:kms:us-east-1:830044764036:key/*
-                  - arn:aws:kms:ca-central-1:830044764036:key/*
+                  - !Sub arn:aws:kms:us-east-1:${AWS::AccountId}:key/*
+                  - !Sub arn:aws:kms:ca-central-1:${AWS::AccountId}:key/*
                 Condition:
                   StringEquals:
                     kms:ViaService:
@@ -652,18 +678,18 @@ Resources:
         - Key: UpdatedBy
           Value: !Ref UpdatedBy
 
-  CopyProcessorFunction:
+  ProcessorFunction:
     Type: AWS::Serverless::Function
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      FunctionName: copy-azure-to-aws-processor
+      FunctionName: awsuse1azuretoaws02-processor
       Description: Consumes SQS messages, retrieves Azure blobs, uploads to S3, updates metadata and cleans up.
-      Role: !GetAtt CopyProcessorFunctionRole.Arn
+      Role: !GetAtt ProcessorFunctionRole.Arn
       CodeUri:
         Bucket: !Ref S3BucketLambda
-        Key: lambdas/Azure_to_AWS/CopyAzureToAWS.Processor.Lambda.zip
-      Handler: CopyAzureToAWS.Processor.Lambda::CopyAzureToAWS.Processor.Lambda.Function::FunctionHandler
+        Key: lambdas/Azure_to_AWS/AzureToAWS.Processor.Lambda_1.2.0.0.zip
+      Handler: AzureToAWS.Processor.Lambda::AzureToAWS.Processor.Lambda.Function::FunctionHandler
       Runtime: dotnet8
       MemorySize: 1536
       Timeout: 180
@@ -673,20 +699,25 @@ Resources:
         SubnetIds: !Ref SubnetIds
       Environment:
         Variables:
-          SECRET_ID: !Sub copy-azure-to-aws/${Environment}/${SecretName}
+          SECRET_ID: !Sub azure-to-aws/${Environment}/${SecretName}
           SecretsManagerTimeOutInSeconds: 30
           TableClientCountryKMSMap: !Ref TableClientCountryKMSMap
+          TableClientCountryKMSCreateRequest: !Ref TableClientCountryKMSCreateRequest
           USS3BucketName: !Ref USS3Bucket
           CAS3BucketName: !Ref CAS3Bucket
           RECORD_AZURE_TO_AWS_STATUS: dbo.usp_record_azure_to_aws_status|Writer
           CallrecordingsPrefix: !Ref CallRecordingsPrefix
+          QUEUE_URL: !Ref AzureToAWSRequestQueue
+          KmsKeyRetryDelayInMinutes: 5
       Events:
         CopyQueueEvent:
           Type: SQS
           Properties:
-            Queue: !GetAtt CopyAzureToAWSRequestQueue.Arn
+            Queue: !GetAtt AzureToAWSRequestQueue.Arn
             BatchSize: 1
             MaximumBatchingWindowInSeconds: 0
+            FunctionResponseTypes:
+              - ReportBatchItemFailures
             Enabled: true
       Tags:
         Project: !Ref Project
@@ -706,8 +737,8 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      TopicName: copy-azure-to-aws-dlq-alerts
-      DisplayName: CopyAzureToAWS DLQ Alerts
+      TopicName: azure-to-aws-dlq-alerts
+      DisplayName: AzureToAWS DLQ Alerts
       Tags:
         - Key: Project
           Value: !Ref Project
@@ -734,13 +765,13 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      AlarmName: !Sub copy-azure-to-aws-dlq-visible-${Environment}
+      AlarmName: !Sub azure-to-aws-dlq-visible-${Environment}
       AlarmDescription: !Sub "DLQ has >=1 visible messages in ${Environment}"
       Namespace: AWS/SQS
       MetricName: ApproximateNumberOfMessagesVisible
       Dimensions:
         - Name: QueueName
-          Value: !GetAtt CopyAzureToAWSRequestQueueDLQ.QueueName
+          Value: !GetAtt AzureToAWSRequestQueueDLQ.QueueName
       Statistic: Sum
       Period: 60
       EvaluationPeriods: 1
@@ -803,20 +834,20 @@ Outputs:
     Value: !Sub https://${RestApiPrivate}.execute-api.${AWS::Region}.amazonaws.com/${Environment}
     Description: Invoke URL (reachable only via the specified VPC endpoint)
   SecretName:
-    Value: !Sub copy-azure-to-aws/${Environment}/${SecretName}
+    Value: !Sub azure-to-aws/${Environment}/${SecretName}
   SecretArn:
     Value: !Ref SecretData
   # Messaging and processing outputs for observability and wiring other stacks
   PrimaryQueueUrl:
-    Value: !Ref CopyAzureToAWSRequestQueue
+    Value: !Ref AzureToAWSRequestQueue
   PrimaryQueueArn:
-    Value: !GetAtt CopyAzureToAWSRequestQueue.Arn
+    Value: !GetAtt AzureToAWSRequestQueue.Arn
   DLQQueueUrl:
-    Value: !Ref CopyAzureToAWSRequestQueueDLQ
+    Value: !Ref AzureToAWSRequestQueueDLQ
   DLQQueueArn:
-    Value: !GetAtt CopyAzureToAWSRequestQueueDLQ.Arn
+    Value: !GetAtt AzureToAWSRequestQueueDLQ.Arn
   ProcessorFunctionName:
-    Value: !Ref CopyProcessorFunction
+    Value: !Ref ProcessorFunction
   DlqAlarmTopicArn:
     Value: !Ref DlqAlarmTopic
     Description: SNS topic ARN for DLQ alerts

@@ -1,6 +1,6 @@
 using Microsoft.Extensions.Configuration;
 
-namespace CopyAzureToAWS.Api.Configuration
+namespace AzureToAWS.Api.Configuration
 {
     public class ConnectionStringResolver : IConnectionStringResolver
     {

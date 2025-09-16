@@ -7,10 +7,10 @@ using Amazon.Runtime.CredentialManagement;
 using Amazon.S3;
 using Amazon.SecretsManager;
 using Amazon.SQS;
-using CopyAzureToAWS.Data.DTOs;
+using AzureToAWS.Data.DTOs;
 using Xunit;
 
-namespace CopyAzureToAWS.Processor.Lambda.Tests;
+namespace AzureToAWS.Processor.Lambda.Tests;
 
 public class FunctionTest
 {
@@ -119,14 +119,14 @@ public class FunctionTest
         //Environment.SetEnvironmentVariable("RECORD_AZURE_TO_AWS_STATUS", "dbo.usp_record_azure_to_aws_status|Writer");
 
         //Dev2 AWS Instance
-        Environment.SetEnvironmentVariable("SECRET_ID", "copy-azure-to-aws/dev/azure_to_aws_1");
+        Environment.SetEnvironmentVariable("SECRET_ID", "azure-to-aws/dev/azure_to_aws_1");
         Environment.SetEnvironmentVariable("USS3BucketName", "awsuse1dev2stqatch01");
         Environment.SetEnvironmentVariable("CAS3BucketName", "awscac1dev2stqatch01");
         Environment.SetEnvironmentVariable("CallrecordingsPrefix", "callrecordings");
         Environment.SetEnvironmentVariable("QUEUE_URL", "callrecordings");
 
         //QA AWS Instance
-        //Environment.SetEnvironmentVariable("SECRET_ID", "copy-azure-to-aws/qa/azure_to_aws_1");
+        //Environment.SetEnvironmentVariable("SECRET_ID", "azure-to-aws/qa/azure_to_aws_1");
         //Environment.SetEnvironmentVariable("USS3BucketName", "awsuse1qas3qatch01");
         //Environment.SetEnvironmentVariable("CAS3BucketName", "awscac1qas3qatch01");
         //Environment.SetEnvironmentVariable("CallrecordingsPrefix", "CallRecordings");

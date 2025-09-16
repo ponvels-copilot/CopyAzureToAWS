@@ -11,10 +11,10 @@ using Amazon.SQS;
 using Amazon.SQS.Model;
 using Amazon.XRay.Recorder.Handlers.AwsSdk;
 using Azure.Core;
-using CopyAzureToAWS.Common.Utilities;
-using CopyAzureToAWS.Data;
-using CopyAzureToAWS.Data.DTOs;
-using CopyAzureToAWS.Data.Models;
+using AzureToAWS.Common.Utilities;
+using AzureToAWS.Data;
+using AzureToAWS.Data.DTOs;
+using AzureToAWS.Data.Models;
 using Microsoft.EntityFrameworkCore;
 using Newtonsoft.Json;
 using Npgsql;
@@ -28,7 +28,7 @@ using System.Text.Json;
 // Assembly attribute to enable the Lambda function's JSON input to be converted into a .NET class.
 [assembly: LambdaSerializer(typeof(Amazon.Lambda.Serialization.SystemTextJson.DefaultLambdaJsonSerializer))]
 
-namespace CopyAzureToAWS.Processor.Lambda;
+namespace AzureToAWS.Processor.Lambda;
 
 public class Function
 {
@@ -1283,7 +1283,7 @@ public class Function
         string sMsg = string.Empty;
         string sMsgFormat = "MoveAndFinalizeRequestAsync: {0}";
 
-        string actor = "CopyAzureToAWS.Lambda";
+        string actor = "AzureToAWS.Lambda";
         string countryCode = sqsMessage.CountryCode;
         long callDetailId = sqsMessage.CallDetailID;
         string audioFile = sqsMessage.AudioFile;

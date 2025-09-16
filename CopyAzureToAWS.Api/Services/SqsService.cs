@@ -1,12 +1,12 @@
 using Amazon.SQS;
 using Amazon.SQS.Model;
-using CopyAzureToAWS.Api.Configuration;
-using CopyAzureToAWS.Api.Infrastructure.Logging; // for WriteLog
-using CopyAzureToAWS.Data.DTOs;
+using AzureToAWS.Api.Configuration;
+using AzureToAWS.Api.Infrastructure.Logging; // for WriteLog
+using AzureToAWS.Data.DTOs;
 using Microsoft.Extensions.Options;
 using System.Text.Json;
 
-namespace CopyAzureToAWS.Api.Services;
+namespace AzureToAWS.Api.Services;
 
 public interface ISqsService
 {

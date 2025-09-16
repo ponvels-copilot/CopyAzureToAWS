@@ -1,9 +1,9 @@
-﻿using CopyAzureToAWS.Api.Configuration;
-using CopyAzureToAWS.Api.Infrastructure.Logging;
-using CopyAzureToAWS.Api.Services;
-using CopyAzureToAWS.Data;
-using CopyAzureToAWS.Data.DTOs;
-using CopyAzureToAWS.Data.Models;
+﻿using AzureToAWS.Api.Configuration;
+using AzureToAWS.Api.Infrastructure.Logging;
+using AzureToAWS.Api.Services;
+using AzureToAWS.Data;
+using AzureToAWS.Data.DTOs;
+using AzureToAWS.Data.Models;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -13,7 +13,7 @@ using NpgsqlTypes;
 using System.Net;
 using System.Runtime.InteropServices;
 
-namespace CopyAzureToAWS.Api.Controllers;
+namespace AzureToAWS.Api.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]

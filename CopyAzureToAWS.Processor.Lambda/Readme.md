@@ -40,12 +40,12 @@ If already installed check if new version is available.
 
 Execute unit tests
 ```
-    cd "CopyAzureToAWS.Processor.Lambda/test/CopyAzureToAWS.Processor.Lambda.Tests"
+    cd "AzureToAWS.Processor.Lambda/test/AzureToAWS.Processor.Lambda.Tests"
     dotnet test
 ```
 
 Deploy function to AWS Lambda
 ```
-    cd "CopyAzureToAWS.Processor.Lambda/src/CopyAzureToAWS.Processor.Lambda"
+    cd "AzureToAWS.Processor.Lambda/src/AzureToAWS.Processor.Lambda"
     dotnet lambda deploy-function
 ```

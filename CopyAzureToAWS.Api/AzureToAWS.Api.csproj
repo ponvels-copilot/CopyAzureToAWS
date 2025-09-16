@@ -4,6 +4,8 @@
     <TargetFramework>net8.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyVersion>1.2.0.0</AssemblyVersion>
+    <FileVersion>1.2.0.0</FileVersion>
   </PropertyGroup>
 
   <ItemGroup>
@@ -25,7 +27,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\CopyAzureToAWS.Data\CopyAzureToAWS.Data.csproj" />
+    <ProjectReference Include="..\CopyAzureToAWS.Data\AzureToAWS.Data.csproj" />
   </ItemGroup>
 
   <ItemGroup>

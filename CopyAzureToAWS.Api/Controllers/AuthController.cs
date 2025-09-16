@@ -1,10 +1,10 @@
-using CopyAzureToAWS.Api.Infrastructure.Logging;
-using CopyAzureToAWS.Api.Services;
-using CopyAzureToAWS.Data.DTOs;
+using AzureToAWS.Api.Infrastructure.Logging;
+using AzureToAWS.Api.Services;
+using AzureToAWS.Data.DTOs;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
-namespace CopyAzureToAWS.Api.Controllers;
+namespace AzureToAWS.Api.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]

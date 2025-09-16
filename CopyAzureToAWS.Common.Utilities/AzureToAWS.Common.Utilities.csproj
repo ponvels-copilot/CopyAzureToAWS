@@ -22,7 +22,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\CopyAzureToAWS.Data\CopyAzureToAWS.Data.csproj" />
+    <ProjectReference Include="..\CopyAzureToAWS.Data\AzureToAWS.Data.csproj" />
   </ItemGroup>
 
 </Project>

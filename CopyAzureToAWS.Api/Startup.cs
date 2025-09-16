@@ -1,12 +1,12 @@
 using System.Text;
-using CopyAzureToAWS.Api.Configuration;
-using CopyAzureToAWS.Api.Services;
-using CopyAzureToAWS.Data;
+using AzureToAWS.Api.Configuration;
+using AzureToAWS.Api.Services;
+using AzureToAWS.Data;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 
-namespace CopyAzureToAWS.Api;
+namespace AzureToAWS.Api;
 
 public class Startup
 {

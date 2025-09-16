@@ -1,9 +1,9 @@
-using CopyAzureToAWS.Data.DTOs;
+using AzureToAWS.Data.DTOs;
 using Microsoft.Extensions.Logging;
 using Microsoft.AspNetCore.Http;
 using Newtonsoft.Json;
 
-namespace CopyAzureToAWS.Api.Infrastructure.Logging;
+namespace AzureToAWS.Api.Infrastructure.Logging;
 
 public static class LoggerExtensions
 {
@@ -39,7 +39,7 @@ public static class LoggerExtensions
         // Replace 'Logging' with the correct DTO type name.
         // If your DTO is named 'LoggingDto', use that instead.
         // Example fix:
-        var payload = new CopyAzureToAWS.Data.DTOs.Logging
+        var payload = new AzureToAWS.Data.DTOs.Logging
         {
             RequestId = requestId,
             Key = key,

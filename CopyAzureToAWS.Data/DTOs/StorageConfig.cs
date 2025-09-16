@@ -1,6 +1,6 @@
 using System.Text.Json.Serialization;
 
-namespace CopyAzureToAWS.Data.DTOs;
+namespace AzureToAWS.Data.DTOs;
 
 public class StorageAZURE
 {

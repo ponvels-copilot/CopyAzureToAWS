@@ -2,15 +2,15 @@ using Amazon.Lambda.AspNetCoreServer;
 using Amazon.SecretsManager;
 using Amazon.SecretsManager.Model;
 using Amazon.SQS;
-using CopyAzureToAWS.Api.Configuration;
-using CopyAzureToAWS.Api.Secrets;
-using CopyAzureToAWS.Api.Services;
+using AzureToAWS.Api.Configuration;
+using AzureToAWS.Api.Secrets;
+using AzureToAWS.Api.Services;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.Configuration;
 using System.Collections.Generic;
 using System.Text.Json;
 
-namespace CopyAzureToAWS.Api
+namespace AzureToAWS.Api
 {
     public class LambdaEntryPoint : APIGatewayProxyFunction
     {

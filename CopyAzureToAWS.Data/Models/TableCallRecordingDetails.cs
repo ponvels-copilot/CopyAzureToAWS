@@ -1,6 +1,6 @@
 using System.ComponentModel.DataAnnotations.Schema;
 
-namespace CopyAzureToAWS.Data.Models;
+namespace AzureToAWS.Data.Models;
 
 [Table("call_recording_details", Schema = "dbo")]
 public class TableCallRecordingDetails

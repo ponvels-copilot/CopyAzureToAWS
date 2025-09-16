@@ -6,7 +6,7 @@ using Azure.Storage;
 using Azure.Storage.Blobs;
 using Azure.Storage.Blobs.Models;
 using Azure.Storage.Blobs.Specialized;
-using CopyAzureToAWS.Data.DTOs;
+using AzureToAWS.Data.DTOs;
 using Microsoft.Identity.Client.Extensions.Msal;
 using Newtonsoft.Json;
 using System;
@@ -16,7 +16,7 @@ using System.Net;
 using System.Text;
 using System.Threading.Tasks;
 
-namespace CopyAzureToAWS.Common.Utilities
+namespace AzureToAWS.Common.Utilities
 {
     public class FileVault
     {
