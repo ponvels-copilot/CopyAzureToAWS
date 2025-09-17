@@ -467,8 +467,9 @@ Resources:
           GetJwtTokenKey: "dbo.fn_get_jwt_token_key|Reader"
           AWS__SQS__QueueUrl: !Ref AzureToAWSRequestQueue
           Logging__LogLevel__Default: Information
-          Logging__LogLevel__Microsoft: Information
-          Logging__LogLevel__Microsoft_AspNetCore: Information
+          Logging__LogLevel__System: Warning
+          Logging__LogLevel__Microsoft: Warning
+          Logging__LogLevel__Microsoft_AspNetCore: Warning
           Logging__LogLevel__AzureToAWS: Information
       Events:
         ApiRoot:
@@ -707,8 +708,8 @@ Resources:
           CAS3BucketName: !Ref CAS3Bucket
           RECORD_AZURE_TO_AWS_STATUS: dbo.usp_record_azure_to_aws_status|Writer
           CallrecordingsPrefix: !Ref CallRecordingsPrefix
-          QUEUE_URL: !Ref AzureToAWSRequestQueue
           KmsKeyRetryDelayInMinutes: 5
+          QUEUE_URL: !Ref AzureToAWSRequestQueue
       Events:
         CopyQueueEvent:
           Type: SQS

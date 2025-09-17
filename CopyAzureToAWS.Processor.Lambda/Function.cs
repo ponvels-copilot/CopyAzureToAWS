@@ -989,16 +989,16 @@ public class Function
             return (null, null, null, null, new Exception(sMsg));
         }
 
+        var cacheKey = programCode;
+        if (_kmsCache.TryGetValue(cacheKey, out var cached))
+            return (cached.Arn, cached.Alias, cached.ClientCode, cached.SystemName, null);
+
         if (_dynamoDBClient == null)
         {
             sMsg = string.Format(sMsgFormat, $"DynamoDB client not initialized.");
             WriteLog("DynamoDB.Client.NotInit", sMsg, new Exception(sMsg));
             return (null, null, null, null, new Exception(sMsg));
         }
-
-        var cacheKey = programCode;
-        if (_kmsCache.TryGetValue(cacheKey, out var cached))
-            return (cached.Arn, cached.Alias, cached.ClientCode, cached.SystemName, null);
 
         try
         {
