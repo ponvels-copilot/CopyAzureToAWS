@@ -50,6 +50,7 @@ Metadata:
           - ApiCustomDomainName
           - ApiCustomDomainBasePath
           - ApiCustomDomainNameArn
+          - CreateBasePathMapping
           
       # - Label:
       #     default: "Azure to AWS S3 Trigger Lambda Code Settings"
@@ -251,9 +252,16 @@ Parameters:
     Description: Base path to use (leave empty for root).
     Default: v1
     AllowedValues: [v1]
+  CreateBasePathMapping:
+    Type: String
+    AllowedValues: ["true","false"]
+    Default: "false"
+    Description: "Set to true (only after first successful deploy) to create BasePathMapping."
 
 Conditions:
   HasCustomBasePath: !Not [ !Equals [ !Ref ApiCustomDomainBasePath, '' ] ]
+  DoCreateBasePathMapping: !Equals [ !Ref CreateBasePathMapping, "true" ]
+
 
 Globals:
   Function:
@@ -815,6 +823,7 @@ Resources:
   # Maps the deployed Stage to the existing custom domain
   ##########################################################################
   RestApiBasePathMapping:
+    Condition: DoCreateBasePathMapping
     Type: AWS::ApiGateway::BasePathMappingV2
     DependsOn: RestApiPrivate
     Properties:
