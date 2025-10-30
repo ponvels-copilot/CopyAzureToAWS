@@ -90,7 +90,9 @@ public class FunctionTest
         var function = new Function(s3Client, s3ClientCA, amazonSQSClient, amazonSecretsManagerClient, dynamoDBClient);
         await function.FunctionHandler(sqsEvent);
 
-        Assert.Contains("Processed message foobar", logger.Buffer.ToString());
+        Assert.Contains("AWS.S3.Upload.Success", logger.Buffer.ToString());
+        // Or, if you want to check for a successful update:
+        Assert.Contains("CallRecordingDetails.Update.Success", logger.Buffer.ToString());
     }
 
     private static AWSCredentials? GetAWSCredentials(EnumAWSProfile enumAWSProfile)

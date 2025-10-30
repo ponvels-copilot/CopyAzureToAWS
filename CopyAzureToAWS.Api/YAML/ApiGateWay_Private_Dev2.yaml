@@ -137,8 +137,8 @@ Parameters:
   SecurityGroupIds:
     Type: List<AWS::EC2::SecurityGroup::Id>
     Description: Security Groups for Lambda ENIs
-    Default: sg-04fe11d44a2a879b2
-    AllowedValues: [sg-04fe11d44a2a879b2]
+    Default: sg-09fd3f3bfdee81b7b
+    AllowedValues: [sg-09fd3f3bfdee81b7b]
   VpcEndpointIds:
     Type: List<String>
     Description: VPC Endpoint IDs for API Gateway Private integration

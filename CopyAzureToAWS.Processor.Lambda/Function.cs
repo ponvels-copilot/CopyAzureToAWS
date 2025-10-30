@@ -562,7 +562,7 @@ public class Function
     /// <returns>A tuple containing the decrypted stream and an exception, if any. The first item is the <see cref="Stream"/>
     /// representing the decrypted file, or <see langword="null"/> if an error occurs. The second item is an <see
     /// cref="Exception"/> representing the error, or <see langword="null"/> if the operation succeeds.</returns>
-    private static async Task<(Stream? AzureStream, Exception? AzureException)> GetAzureStreamAsync(CallDetailInfo callDetailsInfo, StorageAZURE storageConfig)
+    public static async Task<(Stream? AzureStream, Exception? AzureException)> GetAzureStreamAsync(CallDetailInfo callDetailsInfo, StorageAZURE storageConfig)
     {
         try
         {
@@ -1485,7 +1485,7 @@ public class Function
     /// </param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>(Deleted success flag, Exception if any)</returns>
-    private async Task<(bool Deleted, Exception? exception)> DeleteS3ObjectAsync(
+    public async Task<(bool Deleted, Exception? exception)> DeleteS3ObjectAsync(
         string bucket,
         string key,
         string systemname,
