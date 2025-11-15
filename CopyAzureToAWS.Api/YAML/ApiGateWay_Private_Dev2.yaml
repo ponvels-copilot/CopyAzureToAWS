@@ -1,0 +1,866 @@
+#stk-azure-to-aws-restapi-private
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: AzureToAWS API - REST API Private
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: "General Tag Settings"
+        Parameters:
+          - Environment
+          - Client
+          - Project
+          - SubProject
+          - Description
+          - Owner
+          - CreatedBy
+          - UpdatedBy
+      - Label:
+          default: "Configuration for Secret Manager Resource Creation"
+        Parameters:
+          - PostgresConnectionUSReaderString
+          - PostgresConnectionUSWriterString
+          - PostgresConnectionCAReaderString
+          - PostgresConnectionCAWriterString
+      - Label:
+          default: "General Configuration"
+        Parameters:
+          - SecretName
+      - Label:
+          default: "VPC, Subnets, SecurityGroups Configuration for Azure to AWS Lambda(s)"
+        Parameters:
+          - VpcId
+          - SubnetIds
+          - SecurityGroupIds
+          - VpcEndpointIds
+      - Label:
+          default: "S3 & DynamoDB Configuration"
+        Parameters:
+          - CallRecordingsPrefix
+          - USS3Bucket
+          - CAS3Bucket
+          - S3BucketLambda
+          - TableClientCountryKMSMap
+          - TableClientCountryKMSCreateRequest
+      - Label:
+          default: "Rest API Configuration"
+        Parameters:
+          - ApiCustomDomainName
+          - ApiCustomDomainBasePath
+          - ApiCustomDomainNameArn
+          - CreateBasePathMapping
+          
+      # - Label:
+      #     default: "Azure to AWS S3 Trigger Lambda Code Settings"
+      #   Parameters:
+      #     - LambdaS3TriggerKey
+      #     - ExistingRoleArn
+      #     - TriggerBucket
+      # - Label:
+      #     default: "Azure to AWS SQS Trigger Lambda Code Settings"
+      #   Parameters:
+      #     - S3Key
+      #     - SQSLambdaExistingRoleArn
+      #     - QatchTokenEndpoint
+      #     - QatchEndpoint
+      #     - QatchS3Bucket
+
+    ParameterLabels:
+      Environment:
+        default: "Tag for Deployment Environment (dev, alpha, prod)"
+      Client:
+        default: "Tag for Client "
+      Project:
+        default: "Primary Project Tag"
+      SubProject:
+        default: "Sub Project Tag"
+      Description:
+        default: "Brief description about the project"
+      Owner:
+        default: "Who is the owner of the project?"
+      CreatedBy:
+        default: "who creates this resource?"
+      PostgresConnectionUSReaderString:
+        default: "Postgresql reader connection string(readonly) to use in the lambda to retrieve the data from Qatch US database"
+      PostgresConnectionUSWriterString:
+        default: "Postgresql writer connection string(readonly) to use in the lambda to retrieve the data from Qatch US database"
+      PostgresConnectionCAReaderString:
+        default: "Postgresql reader connection string(readonly) to use in the lambda to retrieve the data from Qatch CA database"
+      PostgresConnectionCAWriterString:
+        default: "Postgresql writer connection string(readonly) to use in the lambda to retrieve the data from Qatch CA database"
+      SecretName:
+        default: "Name of the secret to be created in AWS Secrets Manager"
+      # KmsKeyAlias:
+      #   default: "KMS Key Alias for swisscolony client"
+      # QatchApiAccessKey:
+      #   default: "Access key for Qatch API for the given environment"
+      # QatchApiAccessSecret:
+      #   default: "Access Secret for Qatch API for the given environment"
+      VpcId:
+        default: "VPC to associate Lambda with"
+      SubnetIds:
+        default: "Subnets for Lambda ENIs"
+      SecurityGroupIds:
+        default: "Security Groups for Lambda ENIs"
+      VpcEndpointIds:
+        default: "VPC Endpoint IDs for API Gateway Private integration"
+      # S3Bucket:
+      #   default: "S3 bucket where the lambda packages resides"
+      # LambdaS3TriggerKey:
+      #   default: "S3 bucket prefix to the lambda binary packages"
+      # ExistingRoleArn:
+      #   default: "Existing Role to be associated in the given lambda"
+      # QatchS3Bucket:
+      #   default: "Primary Qatch S3 bucket where call recordings are stored"
+      # TriggerBucket:
+      #   default: "S3 bucket name for the trigger to be configured for Lambda for new Metadata JSON"
+      # S3Key:
+      #   default: "S3 bucket prefix to the lambda binary packages for SQS Lambda"
+      # SQSLambdaExistingRoleArn:
+      #   default: "Existing ARN Role for SQS Lambda"
+      # QatchTokenEndpoint:
+      #   default: "Qatch API Token Endpoint"
+      # QatchEndpoint:
+      #   default: "Qatch API Endpoint"
+
+Parameters:
+  VpcId:
+    Type: "AWS::EC2::VPC::Id"
+    Default: "vpc-08834460b465731a3"
+    AllowedValues: [vpc-08834460b465731a3]
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Subnets for Lambda ENIs
+    Default: subnet-0a32e71fe797499b6,subnet-0896e97930e347628
+  SecurityGroupIds:
+    Type: List<AWS::EC2::SecurityGroup::Id>
+    Description: Security Groups for Lambda ENIs
+    Default: sg-04fe11d44a2a879b2
+    AllowedValues: [sg-04fe11d44a2a879b2]
+  VpcEndpointIds:
+    Type: List<String>
+    Description: VPC Endpoint IDs for API Gateway Private integration
+    Default: "vpce-0909347d01c0b50fc"
+    AllowedValues: [vpce-0909347d01c0b50fc]
+  Environment:
+    Description: Environment type.
+    Type: String
+    AllowedValues: [dev, qa, prod]
+    Default: dev
+  Client:
+    Description: Client Info.
+    Type: String
+    AllowedValues: [iqor]
+    Default: iqor
+  Owner:
+    Description: Owner Info.
+    Type: String
+    AllowedValues: [sathya.ramakrishnan]
+    Default: sathya.ramakrishnan
+  CreatedBy:
+    Description: Creator Info.
+    Type: String
+    AllowedValues: [ponvel.shanmuganatha, arun.selvan]
+    Default: ponvel.shanmuganatha
+  UpdatedBy:
+    Description: Updator Info.
+    Type: String
+    AllowedValues: [ponvel.shanmuganatha, arun.selvan]
+    Default: ponvel.shanmuganatha
+  Project:
+    Description: Project Info.
+    Type: String
+    AllowedValues: [qatch]
+    Default: qatch
+  SecretName:
+    Description: Secret Name.
+    Type: String
+    AllowedValues: [azure_to_aws_1]
+    Default: azure_to_aws_1
+  PostgresConnectionUSReaderString:
+    Type: String
+    Default: Server=qatch-db-us-qa-writer.iqor.qor.com;Port=5432;Database=qatch;User Id=qatchappreader;Password=mjY54g0ecNJcD6Km;ApplicationName=Azure_to_AWS_WebApi;timeout=60;
+    NoEcho: true                # ensures password is hidden in console/CLI
+    Description: US Reader - Secure password input for connectionstring
+  PostgresConnectionUSWriterString:
+    Type: String
+    Default: Server=qatch-db-us-qa-writer.iqor.qor.com;Port=5432;Database=qatch;User Id=qatchappadmin;Password=g0U6137{(Kl6;ApplicationName=Azure_to_AWS_WebApi;timeout=60;
+    NoEcho: true                # ensures password is hidden in console/CLI
+    Description: US Writer - Secure password input for connectionstring
+  PostgresConnectionCAReaderString:
+    Type: String
+    Default: Server=qatch-db-ca-qa-reader.iqor.qor.com;Port=5432;Database=qatch_qa;User Id=qatchappreader;Password=9V1yQ'2n/8^P;ApplicationName=Azure_to_AWS_WebApi;timeout=60;
+    NoEcho: true                # ensures password is hidden in console/CLI
+    Description: CA Reader - Secure password input for connectionstring
+  PostgresConnectionCAWriterString:
+    Type: String
+    Default: Server=qatch-db-ca-qa-writer.iqor.qor.com;Port=5432;Database=qatch_qa;User Id=qatchappadmin;Password=j=9r}1[CA102;ApplicationName=Azure_to_AWS_WebApi;timeout=60;
+    NoEcho: true                # ensures password is hidden in console/CLI
+    Description: CA Writer - Secure password input for connectionstring
+  Description:
+    Description: Description Info.
+    Type: String
+    Default: "Azure to AWS REST API"
+  SubProject:
+    Type: String
+    Default: Azure to AWS
+    Description: SubProject tag
+  CallRecordingsPrefix:
+    Type: String
+    Default: CallRecordings
+    AllowedValues: [CallRecordings]
+    Description: S3 bucket for US region
+  USS3Bucket:
+    Type: String
+    Default: awsuse1dev2stqatch01
+    AllowedValues: [awsuse1dev2stqatch01]
+    Description: S3 bucket for US region
+  CAS3Bucket:
+    Type: String
+    Default: awscac1dev2stqatch01
+    AllowedValues: [awscac1dev2stqatch01]
+    Description: S3 bucket for CA region
+  S3BucketLambda:
+    Type: String
+    Default: awsuse1dev2stiqor01
+    AllowedValues: [awsuse1dev2stiqor01]
+    Description: S3 bucket where the lambda packages resides
+  TableClientCountryKMSMap:
+    Type: String
+    Default: clientcountrykmsmap
+    AllowedValues: [clientcountrykmsmap]
+    Description: DynamoDB table name for client country KMS mapping
+  TableClientCountryKMSCreateRequest:
+    Type: String
+    Default: clientcountrykmscreaterequest
+    AllowedValues: [clientcountrykmscreaterequest]
+    Description: DynamoDB table name to hold the client country KMS create requests
+  ApiCustomDomainName:
+    Type: String
+    Description: Existing API Gateway custom domain name to map (must already exist)
+    Default: interactionmetadata-dev.iqor.com
+    AllowedValues: [interactionmetadata-dev.iqor.com]
+  ApiCustomDomainNameArn:
+    Type: String
+    Description: Existing API Gateway custom domain name ARN to map (must already exist)
+    Default: arn:aws:apigateway:us-east-1:818423342968:/domainnames/interactionmetadata-dev.iqor.com+ngoug38i2i
+    AllowedValues: [arn:aws:apigateway:us-east-1:818423342968:/domainnames/interactionmetadata-dev.iqor.com+ngoug38i2i]
+  ApiCustomDomainBasePath:
+    Type: String
+    Description: Base path to use (leave empty for root).
+    Default: v1
+    AllowedValues: [v1]
+  CreateBasePathMapping:
+    Type: String
+    AllowedValues: ["true","false"]
+    Default: "false"
+    Description: "Set to true (only after first successful deploy) to create BasePathMapping."
+
+Conditions:
+  HasCustomBasePath: !Not [ !Equals [ !Ref ApiCustomDomainBasePath, '' ] ]
+  DoCreateBasePathMapping: !Equals [ !Ref CreateBasePathMapping, "true" ]
+
+
+Globals:
+  Function:
+    Runtime: dotnet8
+    MemorySize: 1024
+    Timeout: 300
+    Tracing: Active  # Lambda X-Ray tracing
+
+Resources:
+  ########################################################################## 
+  # Secret storing multiple database connection strings in a single JSON document
+  # referenced by application code via SECRET_ID. Update keys atomically here.
+  ##########################################################################
+  SecretData:
+    Type: AWS::SecretsManager::Secret
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Retain
+    Properties:
+      Name: !Sub azure-to-aws/${Environment}/${SecretName}
+      Description: !Sub "Azure to AWS Rest Api for ${Environment} environment"
+      SecretString: !Sub |
+        {
+          "ConnectionStrings_USReaderConnection": "${PostgresConnectionUSReaderString}",
+          "ConnectionStrings_USWriterConnection": "${PostgresConnectionUSWriterString}",
+          "ConnectionStrings_CAReaderConnection": "${PostgresConnectionCAReaderString}",
+          "ConnectionStrings_CAWriterConnection": "${PostgresConnectionCAWriterString}"
+        }
+      Tags:
+        - Key: Name
+          Value: !Sub SecretData
+        - Key: Description
+          Value: !Ref Description
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Client
+          Value: !Ref Client
+        - Key: CreatedBy
+          Value: !Ref CreatedBy
+        - Key: UpdatedBy
+          Value: !Ref UpdatedBy
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: Project
+          Value: !Ref Project
+        - Key: SubProject
+          Value: !Ref SubProject
+
+  ##########################################################################
+  # IAM role enabling API Gateway to publish execution logs to CloudWatch
+  ##########################################################################
+  ApiGatewayCloudWatchRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub apigw-cwlogs-role-${AWS::StackName}
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: apigateway.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonAPIGatewayPushToCloudWatchLogs
+
+  # Associates the account-level CloudWatch Logs role with API Gateway
+  ApiGatewayAccount:
+    Type: AWS::ApiGateway::Account
+    Properties:
+      CloudWatchRoleArn: !GetAtt ApiGatewayCloudWatchRole.Arn
+
+  ##########################################################################
+  # Private REST API fronting the Lambda (proxy integration, VPC endpoint restricted)
+  ##########################################################################
+  RestApiPrivate:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: azure-to-aws-rest-private
+      Description: >
+        Private VPC Endpoint–restricted REST API for AzureToAWS.
+        Accepts requests, validates call recording metadata, enqueues SQS
+        copy jobs, and exposes health/status endpoints with X-Ray tracing
+        and structured access logging enabled.
+      StageName: !Ref Environment
+      EndpointConfiguration:
+        Type: PRIVATE
+        VpcEndpointIds: !Ref VpcEndpointIds
+      TracingEnabled: true
+      MethodSettings:
+        - ResourcePath: "/*"
+          HttpMethod: "*"
+          LoggingLevel: INFO
+          DataTraceEnabled: true
+          MetricsEnabled: true
+      AccessLogSetting:
+        DestinationArn: !GetAtt RestApiAccessLogs.Arn
+        Format: '{ "requestId":"$context.requestId","ip":"$context.identity.sourceIp","caller":"$context.identity.caller","user":"$context.identity.user","requestTime":"$context.requestTime","httpMethod":"$context.httpMethod","resourcePath":"$context.resourcePath","status":$context.status,"protocol":"$context.protocol","responseLength":"$context.responseLength","integrationStatus":"$context.integrationStatus","integrationError":"$context.integrationErrorMessage","xrayTraceId":"$context.xrayTraceId" }'
+      Auth:
+        ResourcePolicy:
+          CustomStatements:
+            - Effect: Allow
+              Principal: "*"
+              Action: execute-api:Invoke
+              Resource: execute-api:/*/*/*
+              Condition:
+                StringEquals:
+                  aws:SourceVpce: !Ref VpcEndpointIds
+      DefinitionBody:
+        openapi: 3.0.1
+        info:
+          title: azure-to-aws-rest-private
+          version: '1.0'
+        paths:
+          /:
+            x-amazon-apigateway-any-method:
+              x-amazon-apigateway-integration:
+                type: aws_proxy
+                httpMethod: POST
+                uri:
+                  Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${WebApiFunction.Arn}/invocations
+          /{proxy+}:
+            x-amazon-apigateway-any-method:
+              parameters:
+                - name: proxy
+                  in: path
+                  required: true
+                  schema: { type: string }
+              x-amazon-apigateway-integration:
+                type: aws_proxy
+                httpMethod: POST
+                uri:
+                  Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${WebApiFunction.Arn}/invocations
+      Tags:
+        Name: azure-to-aws-rest-private
+        Description: !Ref Description
+        Environment: !Ref Environment
+        Client: !Ref Client
+        CreatedBy: !Ref CreatedBy
+        UpdatedBy: !Ref UpdatedBy
+        Owner: !Ref Owner
+        Project: !Ref Project
+        SubProject: !Ref SubProject
+
+  ##########################################################################
+  # Lambda handling API requests (producer of SQS messages later if wired)
+  ##########################################################################
+  WebApiFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub webapi-fn-role-${AWS::StackName}
+      Description: Execution role for WebApiFunction (Azure to AWS API)
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+      Policies:
+        - PolicyName: WebApiFunctionInlineAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: SendToPrimaryQueue
+                Effect: Allow
+                Action: sqs:SendMessage
+                Resource: !GetAtt AzureToAWSRequestQueue.Arn
+              - Sid: ReadSecret
+                Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                  - secretsmanager:DescribeSecret
+                Resource: !Ref SecretData
+      Tags:
+        - Key: Project
+          Value: !Ref Project
+        - Key: SubProject
+          Value: !Ref SubProject
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Client
+          Value: !Ref Client
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: CreatedBy
+          Value: !Ref CreatedBy
+        - Key: UpdatedBy
+          Value: !Ref UpdatedBy
+
+  WebApiFunction:
+    Type: AWS::Serverless::Function
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      FunctionName: awsuse1azuretoaws01-api-private
+      Description: Handles REST API requests; validates input and enqueues copy jobs to SQS.
+      Role: !GetAtt WebApiFunctionRole.Arn
+      CodeUri:
+        Bucket: !Ref S3BucketLambda
+        Key: lambdas/Azure_to_AWS/AzureToAWS.Api_1.2.0.0.zip
+      Handler: AzureToAWS.Api::AzureToAWS.Api.LambdaEntryPoint::FunctionHandlerAsync
+      Runtime: dotnet8
+      VpcConfig:
+        SecurityGroupIds: !Ref SecurityGroupIds
+        SubnetIds: !Ref SubnetIds
+      Environment:
+        Variables:
+          SECRET_ID: !Sub azure-to-aws/${Environment}/${SecretName}
+          GetExtendedDataUsersCache: "dbo.fn_get_extended_data_users_cache|Reader"
+          GetJwtTokenKey: "dbo.fn_get_jwt_token_key|Reader"
+          AWS__SQS__QueueUrl: !Ref AzureToAWSRequestQueue
+          Logging__LogLevel__Default: Information
+          Logging__LogLevel__System: Warning
+          Logging__LogLevel__Microsoft: Warning
+          Logging__LogLevel__Microsoft_AspNetCore: Warning
+          Logging__LogLevel__AzureToAWS: Information
+      Events:
+        ApiRoot:
+            Type: Api
+            Properties:
+              RestApiId: !Ref RestApiPrivate
+              Path: /
+              Method: ANY
+        ApiProxy:
+            Type: Api
+            Properties:
+              RestApiId: !Ref RestApiPrivate
+              Path: /{proxy+}
+              Method: ANY
+      Tags:
+        Project: !Ref Project
+        SubProject: !Ref SubProject
+        Environment: !Ref Environment
+        Client: !Ref Client
+        Owner: !Ref Owner
+        CreatedBy: !Ref CreatedBy
+        UpdatedBy: !Ref UpdatedBy
+        Description: !Ref Description
+
+  ##########################################################################
+  # Permission allowing API Gateway to invoke the Lambda integration
+  ##########################################################################
+  ApiInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref WebApiFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${RestApiPrivate}/*/*/*
+
+  ##########################################################################
+  # Dedicated log group with retention for WebApiFunction
+  ##########################################################################
+  WebApiFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete          # remove log group too (optional)
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${WebApiFunction}
+      RetentionInDays: 90
+
+  ##########################################################################
+  # Dedicated log group with retention for WebApiFunction
+  ##########################################################################
+  ProcessorFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete          # remove log group too (optional)
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${ProcessorFunction}
+      RetentionInDays: 90
+      
+  ##########################################################################
+  # Access log destination for API Gateway stage
+  ##########################################################################
+  RestApiAccessLogs:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete          # remove log group too (optional)
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub /aws/apigateway/${RestApiPrivate}
+      RetentionInDays: 90
+
+  ###########################################################################
+  # NEW: Dead-letter FIFO queue for failed requests
+  ###########################################################################
+  AzureToAWSRequestQueueDLQ:
+    Type: AWS::SQS::Queue
+    DeletionPolicy: Delete           # <-- ensure removal on stack delete
+    UpdateReplacePolicy: Delete      # <-- ensure old queue deleted if replaced
+    Properties:
+      QueueName: azure-to-aws-request-dlq.fifo
+      FifoQueue: true
+      ContentBasedDeduplication: true
+      MessageRetentionPeriod: 1209600
+
+  ###########################################################################
+  # NEW: Primary FIFO queue for requests
+  ###########################################################################
+  AzureToAWSRequestQueue:
+    Type: AWS::SQS::Queue
+    DeletionPolicy: Delete           # <-- ensure removal on stack delete
+    UpdateReplacePolicy: Delete      # <-- ensure old queue deleted if replaced
+    Properties:
+      QueueName: azure-to-aws-request.fifo
+      FifoQueue: true
+      ContentBasedDeduplication: true
+      VisibilityTimeout: 180
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt AzureToAWSRequestQueueDLQ.Arn
+        maxReceiveCount: 5
+
+  ###########################################################################
+  # NEW: Processor Lambda consuming the primary queue
+  ###########################################################################
+  ProcessorFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub processor-fn-role-${AWS::StackName}
+      Description: Execution role for ProcessorFunction (Azure to AWS Processor)
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+      Policies:
+        - PolicyName: ProcessorInlineAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: SqsPrimaryQueueConsume
+                Effect: Allow
+                Action:
+                  - sqs:ReceiveMessage
+                  - sqs:DeleteMessage
+                  - sqs:GetQueueAttributes
+                  - sqs:ChangeMessageVisibility
+                Resource: !GetAtt AzureToAWSRequestQueue.Arn
+              - Sid: SqsDlqRead
+                Effect: Allow
+                Action:
+                  - sqs:GetQueueAttributes
+                  - sqs:ReceiveMessage
+                  - sqs:DeleteMessage
+                Resource: !GetAtt AzureToAWSRequestQueueDLQ.Arn
+              - Sid: SecretsRead
+                Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                  - secretsmanager:DescribeSecret
+                Resource: !Ref SecretData
+              - Sid: DynamoQuery
+                Effect: Allow
+                Action:
+                  - dynamodb:Query
+                  - dynamodb:DescribeTable
+                Resource: !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TableClientCountryKMSMap}
+              - Sid: DynamoKmsCreateRequestRW
+                Effect: Allow
+                Action:
+                  - dynamodb:Query
+                  - dynamodb:PutItem
+                  - dynamodb:DescribeTable
+                Resource: !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TableClientCountryKMSCreateRequest}
+              # Multi-region KMS usage for S3 object encryption/decryption
+              - Sid: KmsSseS3Use
+                Effect: Allow
+                Action:
+                  - kms:GenerateDataKey
+                  - kms:Decrypt
+                  - kms:Encrypt
+                  - kms:DescribeKey
+                Resource:
+                  - !Sub arn:aws:kms:us-east-1:${AWS::AccountId}:key/*
+                  - !Sub arn:aws:kms:ca-central-1:${AWS::AccountId}:key/*
+                Condition:
+                  StringEquals:
+                    kms:ViaService:
+                      - s3.us-east-1.amazonaws.com
+                      - s3.ca-central-1.amazonaws.com
+              # Optional listing (only keep if your code enumerates keys / aliases)
+              - Sid: KmsList
+                Effect: Allow
+                Action:
+                  - kms:ListKeys
+                  - kms:ListAliases
+                Resource: "*"
+              # --- Added S3 access (US + CA buckets) ---
+              - Sid: S3ListBucketsAccess
+                Effect: Allow
+                Action: s3:ListBucket
+                Resource:
+                  - !Sub arn:aws:s3:::${USS3Bucket}
+                  - !Sub arn:aws:s3:::${CAS3Bucket}
+              - Sid: S3ObjectReadWrite
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - S3:DeleteObject
+                Resource:
+                  - !Sub arn:aws:s3:::${USS3Bucket}/${CallRecordingsPrefix}/*
+                  - !Sub arn:aws:s3:::${CAS3Bucket}/${CallRecordingsPrefix}/*
+      Tags:
+        - Key: Project
+          Value: !Ref Project
+        - Key: SubProject
+          Value: !Ref SubProject
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Client
+          Value: !Ref Client
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: CreatedBy
+          Value: !Ref CreatedBy
+        - Key: UpdatedBy
+          Value: !Ref UpdatedBy
+
+  ProcessorFunction:
+    Type: AWS::Serverless::Function
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      FunctionName: awsuse1azuretoaws02-processor
+      Description: Consumes SQS messages, retrieves Azure blobs, uploads to S3, updates metadata and cleans up.
+      Role: !GetAtt ProcessorFunctionRole.Arn
+      CodeUri:
+        Bucket: !Ref S3BucketLambda
+        Key: lambdas/Azure_to_AWS/AzureToAWS.Processor.Lambda_1.2.0.0.zip
+      Handler: AzureToAWS.Processor.Lambda::AzureToAWS.Processor.Lambda.Function::FunctionHandler
+      Runtime: dotnet8
+      MemorySize: 1536
+      Timeout: 180
+      Tracing: Active
+      VpcConfig:
+        SecurityGroupIds: !Ref SecurityGroupIds
+        SubnetIds: !Ref SubnetIds
+      Environment:
+        Variables:
+          SECRET_ID: !Sub azure-to-aws/${Environment}/${SecretName}
+          SecretsManagerTimeOutInSeconds: 30
+          TableClientCountryKMSMap: !Ref TableClientCountryKMSMap
+          TableClientCountryKMSCreateRequest: !Ref TableClientCountryKMSCreateRequest
+          USS3BucketName: !Ref USS3Bucket
+          CAS3BucketName: !Ref CAS3Bucket
+          RECORD_AZURE_TO_AWS_STATUS: dbo.usp_record_azure_to_aws_status|Writer
+          CallrecordingsPrefix: !Ref CallRecordingsPrefix
+          KmsKeyRetryDelayInMinutes: 5
+          QUEUE_URL: !Ref AzureToAWSRequestQueue
+      Events:
+        CopyQueueEvent:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt AzureToAWSRequestQueue.Arn
+            BatchSize: 1
+            MaximumBatchingWindowInSeconds: 0
+            FunctionResponseTypes:
+              - ReportBatchItemFailures
+            Enabled: true
+      Tags:
+        Project: !Ref Project
+        SubProject: !Ref SubProject
+        Environment: !Ref Environment
+        Client: !Ref Client
+        Owner: !Ref Owner
+        CreatedBy: !Ref CreatedBy
+        UpdatedBy: !Ref UpdatedBy
+        Description: !Ref Description
+
+  ###########################################################################
+  # SNS Topic for DLQ notifications
+  ###########################################################################
+  DlqAlarmTopic:
+    Type: AWS::SNS::Topic
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      TopicName: azure-to-aws-dlq-alerts
+      DisplayName: AzureToAWS DLQ Alerts
+      Tags:
+        - Key: Project
+          Value: !Ref Project
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: SubProject
+          Value: !Ref SubProject
+
+  # OPTIONAL: Subscribe an email (uncomment and replace address)
+  DlqAlarmEmailSubscription:
+    Type: AWS::SNS::Subscription
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      TopicArn: !Ref DlqAlarmTopic
+      Protocol: email
+      Endpoint: QDTWORQBARDEV@iqor.com
+
+  ###########################################################################
+  # CloudWatch Alarm on DLQ visible messages
+  ###########################################################################
+  DlqVisibleMessagesAlarm:
+    Type: AWS::CloudWatch::Alarm
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      AlarmName: !Sub azure-to-aws-dlq-visible-${Environment}
+      AlarmDescription: !Sub "DLQ has >=1 visible messages in ${Environment}"
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt AzureToAWSRequestQueueDLQ.QueueName
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      ActionsEnabled: true
+      AlarmActions:
+        - !Ref DlqAlarmTopic
+      OKActions:
+        - !Ref DlqAlarmTopic
+
+  DlqAlarmTopicPolicy:
+    Type: AWS::SNS::TopicPolicy
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      Topics:
+        - !Ref DlqAlarmTopic
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowCloudWatchPublish
+            Effect: Allow
+            Principal:
+              Service: cloudwatch.amazonaws.com
+            Action: SNS:Publish
+            Resource: !Ref DlqAlarmTopic
+            Condition:
+              StringEquals:
+                AWS:SourceOwner: !Ref AWS::AccountId
+          - Sid: AllowAccountPublish
+            Effect: Allow
+            Principal:
+              AWS: !Ref AWS::AccountId
+            Action: SNS:Publish
+            Resource: !Ref DlqAlarmTopic
+
+  ##########################################################################
+  # Maps the deployed Stage to the existing custom domain
+  ##########################################################################
+  RestApiBasePathMapping:
+    Condition: DoCreateBasePathMapping
+    Type: AWS::ApiGateway::BasePathMappingV2
+    DependsOn: RestApiPrivate
+    Properties:
+      DomainNameArn: !Ref ApiCustomDomainNameArn
+      RestApiId: !Ref RestApiPrivate
+      Stage: !Ref Environment
+      # BasePath is optional; include only if not empty
+      # CloudFormation cannot set an empty string as BasePath; use a Condition
+      # (pseudo property via Fn::If)
+      BasePath: !If [ HasCustomBasePath, !Ref ApiCustomDomainBasePath, !Ref AWS::NoValue ]
+
+Outputs:
+  # Core API + secret identifiers
+  ApiId:
+    Value: !Ref RestApiPrivate
+    Description: API Gateway REST API Id (PRIVATE)
+  ApiInvokeUrl:
+    Value: !Sub https://${RestApiPrivate}.execute-api.${AWS::Region}.amazonaws.com/${Environment}
+    Description: Invoke URL (reachable only via the specified VPC endpoint)
+  SecretName:
+    Value: !Sub azure-to-aws/${Environment}/${SecretName}
+  SecretArn:
+    Value: !Ref SecretData
+  # Messaging and processing outputs for observability and wiring other stacks
+  PrimaryQueueUrl:
+    Value: !Ref AzureToAWSRequestQueue
+  PrimaryQueueArn:
+    Value: !GetAtt AzureToAWSRequestQueue.Arn
+  DLQQueueUrl:
+    Value: !Ref AzureToAWSRequestQueueDLQ
+  DLQQueueArn:
+    Value: !GetAtt AzureToAWSRequestQueueDLQ.Arn
+  ProcessorFunctionName:
+    Value: !Ref ProcessorFunction
+  DlqAlarmTopicArn:
+    Value: !Ref DlqAlarmTopic
+    Description: SNS topic ARN for DLQ alerts
+  DlqVisibleMessagesAlarmName:
+    Value: !Ref DlqVisibleMessagesAlarm
+    Description: CloudWatch alarm monitoring DLQ message visibility
