@@ -1,0 +1,213 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Infrastructure for CopyAzureToAWS application'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: 'dev'
+    Description: 'Environment name'
+
+Resources:
+  # S3 Bucket for storing copied files
+  S3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub 'copy-azure-to-aws-${Environment}-${AWS::AccountId}'
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+  # SQS Queue for processing messages
+  SQSQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub 'copy-azure-to-aws-queue-${Environment}'
+      VisibilityTimeoutSeconds: 300
+      MessageRetentionPeriod: 1209600  # 14 days
+      DeadLetterTargetArn: !GetAtt SQSDeadLetterQueue.Arn
+      MaxReceiveCount: 3
+
+  # Dead Letter Queue
+  SQSDeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub 'copy-azure-to-aws-dlq-${Environment}'
+      MessageRetentionPeriod: 1209600  # 14 days
+
+  # IAM Role for Lambda function
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'CopyAzureToAWSLambdaRole-${Environment}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: S3Access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                Resource: !Sub '${S3Bucket}/*'
+        - PolicyName: SQSAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - sqs:ReceiveMessage
+                  - sqs:DeleteMessage
+                  - sqs:GetQueueAttributes
+                Resource: !GetAtt SQSQueue.Arn
+
+  # Lambda function
+  LambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub 'copy-azure-to-aws-lambda-${Environment}'
+      Runtime: dotnet8
+      Handler: CopyAzureToAWS.Lambda::CopyAzureToAWS.Lambda.Function::FunctionHandler
+      Code:
+        ZipFile: |
+          // Placeholder - will be replaced by CI/CD pipeline
+          using Amazon.Lambda.Core;
+          [assembly: LambdaSerializer(typeof(Amazon.Lambda.Serialization.SystemTextJson.DefaultLambdaJsonSerializer))]
+          namespace CopyAzureToAWS.Lambda
+          {
+              public class Function
+              {
+                  public string FunctionHandler(object input, ILambdaContext context)
+                  {
+                      return "Hello from Lambda!";
+                  }
+              }
+          }
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 300
+      MemorySize: 512
+      Environment:
+        Variables:
+          CONNECTION_STRING: !Ref DatabaseConnectionString
+          S3_BUCKET_NAME: !Ref S3Bucket
+
+  # SQS Event Source Mapping
+  SQSEventSourceMapping:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      EventSourceArn: !GetAtt SQSQueue.Arn
+      FunctionName: !Ref LambdaFunction
+      BatchSize: 1
+
+  # ECS Cluster for API
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub 'copy-azure-to-aws-cluster-${Environment}'
+
+  # ECR Repository for API
+  ECRRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub 'copy-azure-to-aws-api-${Environment}'
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Keep last 5 images",
+                "selection": {
+                  "tagStatus": "any",
+                  "countType": "imageCountMoreThan",
+                  "countNumber": 5
+                },
+                "action": {
+                  "type": "expire"
+                }
+              }
+            ]
+          }
+
+  # RDS Database
+  DatabaseSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: 'Subnet group for CopyAzureToAWS database'
+      SubnetIds:
+        - !Ref DatabaseSubnet1
+        - !Ref DatabaseSubnet2
+
+  DatabaseInstance:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBInstanceIdentifier: !Sub 'copy-azure-to-aws-db-${Environment}'
+      DBInstanceClass: db.t3.micro
+      Engine: sqlserver-ex
+      EngineVersion: '15.00.4312.2.v1'
+      AllocatedStorage: 20
+      MasterUsername: sa
+      MasterUserPassword: !Ref DatabasePassword
+      DBSubnetGroupName: !Ref DatabaseSubnetGroup
+      VPCSecurityGroups:
+        - !Ref DatabaseSecurityGroup
+
+Parameters:
+  DatabasePassword:
+    Type: String
+    NoEcho: true
+    Description: 'Database password'
+    MinLength: 8
+
+  DatabaseConnectionString:
+    Type: String
+    Description: 'Database connection string'
+
+  DatabaseSubnet1:
+    Type: AWS::EC2::Subnet::Id
+    Description: 'First database subnet'
+
+  DatabaseSubnet2:
+    Type: AWS::EC2::Subnet::Id
+    Description: 'Second database subnet'
+
+  DatabaseSecurityGroup:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: 'Security group for database'
+
+Outputs:
+  S3BucketName:
+    Description: 'S3 Bucket for storing files'
+    Value: !Ref S3Bucket
+    Export:
+      Name: !Sub '${AWS::StackName}-S3Bucket'
+
+  SQSQueueUrl:
+    Description: 'SQS Queue URL'
+    Value: !Ref SQSQueue
+    Export:
+      Name: !Sub '${AWS::StackName}-SQSQueue'
+
+  LambdaFunctionArn:
+    Description: 'Lambda Function ARN'
+    Value: !GetAtt LambdaFunction.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-LambdaFunction'
+
+  ECRRepositoryUri:
+    Description: 'ECR Repository URI'
+    Value: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ECRRepository}'
+    Export:
+      Name: !Sub '${AWS::StackName}-ECRRepository'

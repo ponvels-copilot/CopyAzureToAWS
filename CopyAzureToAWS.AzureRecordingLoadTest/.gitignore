@@ -1,0 +1,19 @@
+# Build results
+bin/
+obj/
+
+# User-specific files
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Test results
+load_test_results_*.csv
+
+# IDE
+.vs/
+.vscode/
+
+# Logs
+*.log

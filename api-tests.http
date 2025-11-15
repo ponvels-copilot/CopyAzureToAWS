@@ -1,0 +1,68 @@
+### CopyAzureToAWS API Test Collection
+
+# Authentication Test
+POST http://localhost:5172/api/auth/login
+Content-Type: application/json
+
+{
+  "username": "admin",
+  "password": "SecurePassword123!"
+}
+
+### 
+# Store the token from the response above and use it in subsequent requests
+@authToken = {{login.response.body.token}}
+
+### Submit Call Detail for Processing
+POST http://localhost:5172/api/calldetails
+Content-Type: application/json
+Authorization: Bearer {{authToken}}
+
+{
+  "callDetailId": "CALL123456789",
+  "audioFileName": "customer_call_recording.wav",
+  "azureConnectionString": "DefaultEndpointsProtocol=https;AccountName=yourstorageaccount;AccountKey=yourkey;EndpointSuffix=core.windows.net",
+  "azureBlobUrl": "https://yourstorageaccount.blob.core.windows.net/recordings/customer_call_recording.wav",
+  "s3BucketName": "my-aws-audio-bucket"
+}
+
+### Get Specific Call Detail Status
+GET http://localhost:5172/api/calldetails/CALL123456789
+Authorization: Bearer {{authToken}}
+
+### Get All Call Details
+GET http://localhost:5172/api/calldetails
+Authorization: Bearer {{authToken}}
+
+### Get Call Details by Status
+GET http://localhost:5172/api/calldetails?status=Completed
+Authorization: Bearer {{authToken}}
+
+### Get Pending Call Details
+GET http://localhost:5172/api/calldetails?status=Pending
+Authorization: Bearer {{authToken}}
+
+### Get Failed Call Details
+GET http://localhost:5172/api/calldetails?status=Failed
+Authorization: Bearer {{authToken}}
+
+### Test with Invalid Credentials
+POST http://localhost:5172/api/auth/login
+Content-Type: application/json
+
+{
+  "username": "invalid",
+  "password": "wrongpassword"
+}
+
+### Test Unauthorized Access (without token)
+POST http://localhost:5172/api/calldetails
+Content-Type: application/json
+
+{
+  "callDetailId": "CALL999",
+  "audioFileName": "test.wav",
+  "azureConnectionString": "test",
+  "azureBlobUrl": "test",
+  "s3BucketName": "test"
+}

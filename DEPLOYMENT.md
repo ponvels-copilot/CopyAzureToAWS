@@ -1,183 +1,191 @@
 # Deployment Guide
 
+This guide covers deploying the CopyAzureToAWS system to AWS.
+
 ## Prerequisites
-- AWS CLI configured with appropriate permissions
-- AWS SAM CLI installed
-- Node.js 18+ and npm
 
-## Step-by-Step Deployment
+1. AWS Account with appropriate permissions
+2. AWS CLI configured
+3. GitHub repository with source code
+4. Azure Storage Account for source files
 
-### 1. Install Dependencies
-```bash
-npm install
-```
+## Step 1: Deploy Infrastructure
 
-### 2. Run Tests
-```bash
-npm test
-```
-
-### 3. Deploy the Stack
-```bash
-# Basic deployment
-./deploy.sh
-
-# Custom deployment with parameters
-./deploy.sh --stack-name my-copy-service --region us-west-2 \
-  --auth-url https://your-auth-api.com/token \
-  --calldetails-url https://your-api.com/calldetails
-```
-
-### 4. Configure SSM Parameters
-After deployment, set up the authentication credentials:
+Deploy the CloudFormation stack to create AWS resources:
 
 ```bash
-# Set access key (replace with your actual key)
-aws ssm put-parameter \
-  --name '/copyazure/accesskey' \
-  --value 'YOUR_ACCESS_KEY' \
-  --type 'SecureString' \
-  --description 'Access key for authentication'
-
-# Set secret key (replace with your actual secret)
-aws ssm put-parameter \
-  --name '/copyazure/secretkey' \
-  --value 'YOUR_SECRET_KEY' \
-  --type 'SecureString' \
-  --description 'Secret key for authentication'
+aws cloudformation deploy \
+  --template-file infrastructure/cloudformation.yml \
+  --stack-name copy-azure-to-aws-infrastructure \
+  --parameter-overrides \
+    Environment=prod \
+    DatabasePassword=YourSecurePassword123! \
+    DatabaseConnectionString="Server=your-rds-endpoint;Database=CopyAzureToAWS;User Id=sa;Password=YourSecurePassword123!;" \
+    DatabaseSubnet1=subnet-xxxxxxxx \
+    DatabaseSubnet2=subnet-yyyyyyyy \
+    DatabaseSecurityGroup=sg-xxxxxxxxx \
+  --capabilities CAPABILITY_IAM
 ```
 
-### 5. Test the Deployment
-Get the S3 bucket name from the deployment output:
+## Step 2: Configure GitHub Secrets
+
+In your GitHub repository, go to Settings > Secrets and variables > Actions and add:
+
+- `AWS_ACCESS_KEY_ID`: Your AWS access key
+- `AWS_SECRET_ACCESS_KEY`: Your AWS secret key
+
+## Step 3: Update Configuration
+
+Update the configuration files with your AWS resource ARNs and endpoints:
+
+### API Configuration
+Update `CopyAzureToAWS.Api/appsettings.json`:
+
+```json
+{
+  "ConnectionStrings": {
+    "DefaultConnection": "Server=your-rds-endpoint;Database=CopyAzureToAWS;User Id=sa;Password=YourSecurePassword123!;"
+  },
+  "AWS": {
+    "SQS": {
+      "QueueUrl": "https://sqs.us-east-1.amazonaws.com/YOUR-ACCOUNT-ID/copy-azure-to-aws-queue-prod"
+    }
+  }
+}
+```
+
+### Lambda Environment Variables
+The CloudFormation template automatically sets these, but verify:
+
+- `CONNECTION_STRING`: Database connection string
+- `S3_BUCKET_NAME`: Target S3 bucket name
+
+## Step 4: Deploy Application
+
+Push to the main branch to trigger deployment:
+
 ```bash
-aws cloudformation describe-stacks --stack-name copy-azure-to-aws --query 'Stacks[0].Outputs'
+git push origin main
 ```
 
-Upload test files:
+This will:
+1. Build and test the application
+2. Push Docker image to ECR
+3. Deploy API to ECS
+4. Package and deploy Lambda function
+
+## Step 5: Verify Deployment
+
+### Test API Endpoint
+
 ```bash
-./test-data.sh YOUR_BUCKET_NAME
+# Get the ECS service endpoint from AWS Console or CLI
+API_ENDPOINT="https://your-api-endpoint.amazonaws.com"
+
+# Test authentication
+curl -X POST $API_ENDPOINT/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"SecurePassword123!"}'
+
+# Store the token and test call detail submission
+TOKEN="your-jwt-token-here"
+curl -X POST $API_ENDPOINT/api/calldetails \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{
+    "callDetailId": "TEST123",
+    "audioFileName": "test.wav",
+    "azureConnectionString": "your-azure-connection-string",
+    "azureBlobUrl": "https://youraccount.blob.core.windows.net/container/test.wav",
+    "s3BucketName": "your-s3-bucket-name"
+  }'
 ```
 
-### 6. Monitor Processing
+### Check Lambda Function
+
+1. Go to AWS Lambda Console
+2. Find `copy-azure-to-aws-lambda-prod` function
+3. Check CloudWatch logs for execution details
+
+### Monitor SQS Queue
+
+1. Go to AWS SQS Console
+2. Check `copy-azure-to-aws-queue-prod` for messages
+3. Monitor message processing and dead letter queue
+
+## Step 6: Database Setup
+
+If using RDS, you may need to run migrations:
+
 ```bash
-# View CloudWatch logs
-aws logs tail /aws/lambda/copy-azure-to-aws-S3ProcessorFunction --follow
-
-# Check Lambda metrics
-aws cloudwatch get-metric-statistics \
-  --namespace AWS/Lambda \
-  --metric-name Invocations \
-  --dimensions Name=FunctionName,Value=copy-azure-to-aws-S3ProcessorFunction \
-  --start-time $(date -u -d '1 hour ago' +%Y-%m-%dT%H:%M:%S) \
-  --end-time $(date -u +%Y-%m-%dT%H:%M:%S) \
-  --period 300 \
-  --statistics Sum
+# Connect to RDS instance and run migrations
+dotnet ef database update --connection "your-connection-string"
 ```
-
-## Configuration Options
-
-### Environment Variables
-Set these in the SAM template or via AWS Console:
-
-- `AUTH_URL`: JWT authentication endpoint
-- `CALL_DETAILS_URL`: API endpoint for posting data
-- `MAX_RECORDS_PER_BATCH`: Maximum records per API call (default: 500)
-- `MAX_RETRIES`: Maximum retry attempts (default: 3)
-
-### Scaling Configuration
-- **Reserved Concurrency**: 50 (prevents overwhelming the API)
-- **Memory**: 512MB (adjust based on file size)
-- **Timeout**: 900 seconds (15 minutes)
-
-### File Format Requirements
-Files must be `.txt` extension and contain:
-- **JSON Lines**: Each line is a valid JSON object
-- **Plain Text**: Each line is treated as a record
 
 ## Troubleshooting
 
 ### Common Issues
 
-1. **Lambda Timeout**
-   - Increase timeout in template.yaml
-   - Reduce batch size via `MAX_RECORDS_PER_BATCH`
+1. **Database Connection Issues**
+   - Verify RDS security groups allow connections
+   - Check connection string format
+   - Ensure database is accessible from ECS and Lambda
 
-2. **Authentication Failures**
-   - Verify SSM parameters are correctly set
-   - Check AUTH_URL endpoint is reachable
-   - Ensure access keys have proper permissions
+2. **SQS Permission Issues**
+   - Verify IAM roles have proper SQS permissions
+   - Check queue URL format
+   - Ensure Lambda has SQS trigger configured
 
-3. **API Call Failures**
-   - Verify CALL_DETAILS_URL endpoint
-   - Check API expects the data format being sent
-   - Review CloudWatch logs for detailed error messages
+3. **S3 Access Issues**
+   - Verify IAM roles have S3 permissions
+   - Check bucket names and regions
+   - Ensure Lambda execution role includes S3 access
 
-4. **S3 Permission Issues**
-   - Ensure Lambda execution role has S3:GetObject permission
-   - Check S3 bucket policies don't block access
+4. **API Authentication Issues**
+   - Verify JWT secret key configuration
+   - Check username/password settings
+   - Ensure token expiration is appropriate
 
-### Debug Commands
-```bash
-# Test SSM parameter retrieval
-aws ssm get-parameters --names '/copyazure/accesskey' '/copyazure/secretkey' --with-decryption
+### Monitoring and Logging
 
-# Test Lambda function directly
-aws lambda invoke \
-  --function-name copy-azure-to-aws-S3ProcessorFunction \
-  --payload '{"Records":[{"eventSource":"aws:s3","eventName":"ObjectCreated:Put","s3":{"bucket":{"name":"YOUR_BUCKET"},"object":{"key":"test.txt"}}}]}' \
-  output.json
+- **CloudWatch Logs**: Check for Lambda execution logs
+- **ECS Service Logs**: Monitor API container logs
+- **SQS Metrics**: Watch queue depth and processing rates
+- **Database Metrics**: Monitor RDS performance
 
-# View function configuration
-aws lambda get-function-configuration \
-  --function-name copy-azure-to-aws-S3ProcessorFunction
-```
+### Scaling Considerations
 
-## Performance Tuning
+- **API**: Adjust ECS service desired count based on load
+- **Lambda**: Increase memory and timeout for large files
+- **Database**: Scale RDS instance type as needed
+- **SQS**: Configure DLQ and retry policies
 
-### For High Volume (Millions of Records)
-1. **Increase Concurrency**
-   ```yaml
-   ReservedConcurrencyLimit: 100  # Adjust based on API rate limits
-   ```
+## Production Considerations
 
-2. **Optimize Batch Size**
-   ```bash
-   # Larger batches = fewer API calls but more memory usage
-   MAX_RECORDS_PER_BATCH=1000
-   ```
+1. **Security**
+   - Use AWS Secrets Manager for sensitive data
+   - Implement proper VPC security groups
+   - Enable CloudTrail for audit logging
 
-3. **Memory Allocation**
-   ```yaml
-   MemorySize: 1024  # For processing larger files
-   ```
+2. **High Availability**
+   - Deploy across multiple AZs
+   - Configure RDS Multi-AZ
+   - Use Application Load Balancer
 
-4. **Add SQS for Buffering**
-   - Consider adding SQS between S3 events and Lambda for better control
-   - Enables batch processing of multiple files
+3. **Backup and Recovery**
+   - Enable RDS automated backups
+   - Implement S3 versioning
+   - Create CloudFormation stack backups
 
-### Cost Optimization
-- Use S3 Intelligent Tiering for processed files
-- Set lifecycle policies to archive old files
-- Monitor Lambda duration and optimize batch sizes
-- Use CloudWatch to identify underutilized resources
+4. **Cost Optimization**
+   - Use appropriate instance sizes
+   - Implement S3 lifecycle policies
+   - Monitor and adjust Lambda memory allocation
 
-## Security Best Practices
+## Support
 
-1. **IAM Roles**: Use minimal required permissions
-2. **Encryption**: All data encrypted in transit and at rest
-3. **Secrets**: Store all credentials in SSM Parameter Store
-4. **VPC**: Deploy Lambda in VPC if API endpoints are private
-5. **Monitoring**: Enable CloudTrail for API calls audit
-
-## Monitoring and Alerts
-
-Key metrics to monitor:
-- Lambda duration and errors
-- API call success/failure rates
-- Dead letter queue message count
-- JWT token refresh frequency
-
-Set up CloudWatch alarms for:
-- Lambda error rate > 5%
-- DLQ messages > 10
-- Lambda duration > 5 minutes
+For deployment issues, check:
+1. CloudFormation stack events
+2. CloudWatch logs
+3. GitHub Actions workflow logs
+4. AWS service health dashboard
