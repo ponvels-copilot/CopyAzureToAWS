@@ -101,6 +101,126 @@ dotnet build
 
 ### 2. Database Setup
 
+## Prerequisites
+
+- AWS CLI configured with appropriate permissions
+- AWS SAM CLI installed
+- Node.js 18+ and npm
+- Access to target authentication and API endpoints
+
+## Quick Start
+
+1. **Clone and Install Dependencies**
+   ```bash
+   git clone <repository-url>
+   cd CopyAzureToAWS
+   npm install
+   ```
+
+2. **Configure Environment**
+   ```bash
+   cp .env.example .env
+   # Edit .env with your configuration
+   ```
+
+3. **Deploy to AWS**
+   ```bash
+   ./deploy.sh --auth-url https://your-auth-api.com/token --calldetails-url https://your-api.com/calldetails
+   ```
+
+4. **Set up SSM Parameters**
+   ```bash
+   aws ssm put-parameter --name '/copyazure/accesskey' --value 'YOUR_ACCESS_KEY' --type 'SecureString'
+   aws ssm put-parameter --name '/copyazure/secretkey' --value 'YOUR_SECRET_KEY' --type 'SecureString'
+   ```
+
+## Configuration
+
+### Environment Variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `AUTH_URL` | JWT authentication endpoint | Required |
+| `CALL_DETAILS_URL` | API endpoint for posting data | Required |
+| `ACCESS_KEY_PARAM` | SSM parameter name for access key | `/copyazure/accesskey` |
+| `SECRET_KEY_PARAM` | SSM parameter name for secret key | `/copyazure/secretkey` |
+| `MAX_RECORDS_PER_BATCH` | Maximum records per batch | `500` |
+| `MAX_RETRIES` | Maximum retry attempts | `3` |
+
+### File Format Support
+
+The Lambda function supports two file formats:
+
+1. **JSON Lines**: Each line contains a JSON object
+   ```
+   {"id": 1, "name": "John", "data": "example"}
+   {"id": 2, "name": "Jane", "data": "example"}
+   ```
+
+2. **Plain Text**: Each line is treated as a record
+   ```
+   Record 1
+   Record 2
+   Record 3
+   ```
+
+## API Integration
+
+### Authentication Flow
+
+1. Lambda retrieves access key and secret from SSM Parameter Store
+2. Makes POST request to `AUTH_URL` with credentials
+3. Receives JWT token and caches it (50-minute cache duration)
+4. Uses cached token for subsequent API calls until expiration
+
+### Data Submission
+
+The Lambda sends batched data to `CALL_DETAILS_URL` with structure:
+```json
+{
+  "records": [
+    {"id": 1, "data": "example"},
+    {"id": 2, "data": "example"}
+  ],
+  "timestamp": "2023-12-07T10:30:00.000Z",
+  "batchSize": 2
+}
+```
+
+## Error Handling
+
+### Retry Logic
+
+- **Authentication Failures**: Token refresh on 401 errors
+- **API Failures**: Exponential backoff retry (3 attempts by default)
+- **S3 Failures**: Individual file processing errors don't stop batch processing
+
+### Dead Letter Queue
+
+Failed messages are sent to a Dead Letter Queue for manual inspection and reprocessing.
+
+### Monitoring
+
+CloudWatch alarms monitor:
+- Lambda function errors
+- Processing latency
+- Dead letter queue message count
+
+## Performance Characteristics
+
+- **Concurrency**: Limited to 50 concurrent executions to prevent API overload
+- **Batch Size**: Configurable (default 500 records per API call)
+- **Processing Time**: 15-minute maximum Lambda execution time
+- **Peak Handling**: Optimized for 10 AM - 8 PM EST peak periods
+
+## Testing
+
+Run the test suite:
+```bash
+npm test
+```
+
+Run tests with coverage:
 ```bash
 cd CopyAzureToAWS.Api
 dotnet ef migrations add InitialCreate

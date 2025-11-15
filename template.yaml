@@ -1,0 +1,134 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: 'S3 to API processing with JWT authentication'
+
+Parameters:
+  AuthUrl:
+    Type: String
+    Description: URL for JWT authentication
+    Default: 'https://auth.example.com/token'
+  
+  CallDetailsUrl:
+    Type: String
+    Description: URL for posting call details
+    Default: 'https://api.example.com/calldetails'
+  
+  AccessKeyParameter:
+    Type: String
+    Description: SSM Parameter name for access key
+    Default: '/copyazure/accesskey'
+  
+  SecretKeyParameter:
+    Type: String
+    Description: SSM Parameter name for secret key
+    Default: '/copyazure/secretkey'
+
+Globals:
+  Function:
+    Timeout: 900
+    MemorySize: 512
+    Runtime: nodejs18.x
+
+Resources:
+  # Lambda function for processing S3 files
+  S3ProcessorFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/
+      Handler: handler.processS3Files
+      Environment:
+        Variables:
+          AUTH_URL: !Ref AuthUrl
+          CALL_DETAILS_URL: !Ref CallDetailsUrl
+          ACCESS_KEY_PARAM: !Ref AccessKeyParameter
+          SECRET_KEY_PARAM: !Ref SecretKeyParameter
+          MAX_RECORDS_PER_BATCH: '500'
+          MAX_RETRIES: '3'
+      Events:
+        S3Event:
+          Type: S3
+          Properties:
+            Bucket: !Ref ProcessingBucket
+            Events: s3:ObjectCreated:*
+            Filter:
+              S3Key:
+                Rules:
+                  - Name: suffix
+                    Value: .txt
+      DeadLetterQueue:
+        Type: SQS
+        TargetArn: !GetAtt DeadLetterQueue.Arn
+      ReservedConcurrencyLimit: 50
+      Policies:
+        - S3ReadPolicy:
+            BucketName: !Ref ProcessingBucket
+        - SSMParameterReadPolicy:
+            ParameterName: !Ref AccessKeyParameter
+        - SSMParameterReadPolicy:
+            ParameterName: !Ref SecretKeyParameter
+        - SQSSendMessagePolicy:
+            QueueName: !GetAtt DeadLetterQueue.QueueName
+        - CloudWatchLogsFullAccess
+
+  # S3 bucket for processing
+  ProcessingBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${AWS::StackName}-processing-bucket'
+      NotificationConfiguration:
+        LambdaConfigurations:
+          - Event: s3:ObjectCreated:*
+            Function: !GetAtt S3ProcessorFunction.Arn
+            Filter:
+              S3Key:
+                Rules:
+                  - Name: suffix
+                    Value: .txt
+      VersioningConfiguration:
+        Status: Enabled
+
+  # Dead letter queue for failed messages
+  DeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub '${AWS::StackName}-dlq'
+      MessageRetentionPeriod: 1209600  # 14 days
+
+  # CloudWatch Alarms
+  ProcessingErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${AWS::StackName}-processing-errors'
+      AlarmDescription: 'Alert when Lambda function errors exceed threshold'
+      MetricName: Errors
+      Namespace: AWS/Lambda
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 10
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref S3ProcessorFunction
+
+  # Lambda permission for S3 bucket
+  S3InvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref S3ProcessorFunction
+      Action: lambda:InvokeFunction
+      Principal: s3.amazonaws.com
+      SourceArn: !Sub '${ProcessingBucket}/*'
+
+Outputs:
+  ProcessingBucketName:
+    Description: 'Name of the S3 bucket for processing'
+    Value: !Ref ProcessingBucket
+    Export:
+      Name: !Sub '${AWS::StackName}-ProcessingBucket'
+  
+  LambdaFunctionArn:
+    Description: 'ARN of the Lambda function'
+    Value: !GetAtt S3ProcessorFunction.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-LambdaFunction'

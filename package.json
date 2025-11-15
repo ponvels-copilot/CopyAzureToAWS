@@ -1,0 +1,30 @@
+{
+  "name": "copy-azure-to-aws",
+  "version": "1.0.0",
+  "description": "AWS Lambda function to process S3 files and send data via API with JWT authentication",
+  "main": "src/handler.js",
+  "scripts": {
+    "test": "jest",
+    "build": "npm install",
+    "deploy": "sam deploy",
+    "local": "sam local start-api"
+  },
+  "dependencies": {
+    "aws-sdk": "^2.1691.0",
+    "axios": "^1.6.0",
+    "jsonwebtoken": "^9.0.2"
+  },
+  "devDependencies": {
+    "jest": "^29.0.0",
+    "aws-sdk-mock": "^5.8.0"
+  },
+  "keywords": [
+    "aws",
+    "lambda",
+    "s3",
+    "jwt",
+    "api"
+  ],
+  "author": "",
+  "license": "MIT"
+}
