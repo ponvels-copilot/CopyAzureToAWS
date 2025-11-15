@@ -1,0 +1,17 @@
+# Sample test data file
+# Format: CountryCode,AudioFile,CallDetailID
+US,audio001.wav,CALL_001
+UK,audio002.wav,CALL_002
+CA,audio003.wav,CALL_003
+AU,audio004.wav,CALL_004
+DE,audio005.wav,CALL_005
+FR,audio006.wav,CALL_006
+IT,audio007.wav,CALL_007
+ES,audio008.wav,CALL_008
+NL,audio009.wav,CALL_009
+BE,audio010.wav,CALL_010
+US,audio011.wav,CALL_011
+UK,audio012.wav,CALL_012
+CA,audio013.wav,CALL_013
+AU,audio014.wav,CALL_014
+DE,audio015.wav,CALL_015
