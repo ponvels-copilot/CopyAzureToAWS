@@ -177,8 +177,8 @@ Parameters:
   SecretName:
     Description: Secret Name.
     Type: String
-    AllowedValues: [azure_to_aws_1]
-    Default: azure_to_aws_1
+    AllowedValues: [azure_to_aws]
+    Default: azure_to_aws
   PostgresConnectionUSReaderString:
     Type: String
     Default: Server=qatch-db-us-qa-writer.iqor.qor.com;Port=5432;Database=qatch;User Id=qatchappreader;Password=mjY54g0ecNJcD6Km;ApplicationName=Azure_to_AWS_WebApi;timeout=60;
@@ -324,6 +324,23 @@ Resources:
             Action: sts:AssumeRole
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AmazonAPIGatewayPushToCloudWatchLogs
+      Tags:
+        - Key: Project
+          Value: !Ref Project
+        - Key: SubProject
+          Value: !Ref SubProject
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Client
+          Value: !Ref Client
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: CreatedBy
+          Value: !Ref CreatedBy
+        - Key: UpdatedBy
+          Value: !Ref UpdatedBy
+        - Key: Description
+          Value: !Ref Description
 
   # Associates the account-level CloudWatch Logs role with API Gateway
   ApiGatewayAccount:
@@ -523,6 +540,21 @@ Resources:
     Properties:
       LogGroupName: !Sub /aws/lambda/${WebApiFunction}
       RetentionInDays: 90
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Client
+          Value: !Ref Client
+        - Key: CreatedBy
+          Value: !Ref CreatedBy
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: Description
+          Value: !Ref Description
+        - Key: Project
+          Value: !Ref Project
+        - Key: SubProject
+          Value: !Ref SubProject
 
   ##########################################################################
   # Dedicated log group with retention for WebApiFunction
@@ -534,6 +566,21 @@ Resources:
     Properties:
       LogGroupName: !Sub /aws/lambda/${ProcessorFunction}
       RetentionInDays: 90
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Client
+          Value: !Ref Client
+        - Key: CreatedBy
+          Value: !Ref CreatedBy
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: Description
+          Value: !Ref Description
+        - Key: Project
+          Value: !Ref Project
+        - Key: SubProject
+          Value: !Ref SubProject
       
   ##########################################################################
   # Access log destination for API Gateway stage
@@ -545,6 +592,21 @@ Resources:
     Properties:
       LogGroupName: !Sub /aws/apigateway/${RestApiPrivate}
       RetentionInDays: 90
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Client
+          Value: !Ref Client
+        - Key: CreatedBy
+          Value: !Ref CreatedBy
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: Description
+          Value: !Ref Description
+        - Key: Project
+          Value: !Ref Project
+        - Key: SubProject
+          Value: !Ref SubProject
 
   ###########################################################################
   # NEW: Dead-letter FIFO queue for failed requests
@@ -558,6 +620,23 @@ Resources:
       FifoQueue: true
       ContentBasedDeduplication: true
       MessageRetentionPeriod: 1209600
+      Tags:
+          - Key: Name
+            Value: azure-to-aws-request-dlq.fifo
+          - Key: Environment
+            Value: !Ref Environment
+          - Key: Client
+            Value: !Ref Client
+          - Key: CreatedBy
+            Value: !Ref CreatedBy
+          - Key: Owner
+            Value: !Ref Owner
+          - Key: Description
+            Value: !Ref Description
+          - Key: Project
+            Value: !Ref Project
+          - Key: SubProject
+            Value: !Ref SubProject
 
   ###########################################################################
   # NEW: Primary FIFO queue for requests
@@ -574,6 +653,23 @@ Resources:
       RedrivePolicy:
         deadLetterTargetArn: !GetAtt AzureToAWSRequestQueueDLQ.Arn
         maxReceiveCount: 5
+      Tags:
+          - Key: Name
+            Value: azure-to-aws-request.fifo
+          - Key: Environment
+            Value: !Ref Environment
+          - Key: Client
+            Value: !Ref Client
+          - Key: CreatedBy
+            Value: !Ref CreatedBy
+          - Key: Owner
+            Value: !Ref Owner
+          - Key: Description
+            Value: !Ref Description
+          - Key: Project
+            Value: !Ref Project
+          - Key: SubProject
+            Value: !Ref SubProject
 
   ###########################################################################
   # NEW: Processor Lambda consuming the primary queue
@@ -749,10 +845,20 @@ Resources:
       TopicName: azure-to-aws-dlq-alerts
       DisplayName: AzureToAWS DLQ Alerts
       Tags:
-        - Key: Project
-          Value: !Ref Project
+        - Key: Name
+          Value: azure-to-aws-dlq-alerts
         - Key: Environment
           Value: !Ref Environment
+        - Key: Client
+          Value: !Ref Client
+        - Key: CreatedBy
+          Value: !Ref CreatedBy
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: Description
+          Value: !Ref Description
+        - Key: Project
+          Value: !Ref Project
         - Key: SubProject
           Value: !Ref SubProject
 
@@ -825,6 +931,8 @@ Resources:
   RestApiBasePathMapping:
     Condition: DoCreateBasePathMapping
     Type: AWS::ApiGateway::BasePathMappingV2
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
     DependsOn: RestApiPrivate
     Properties:
       DomainNameArn: !Ref ApiCustomDomainNameArn

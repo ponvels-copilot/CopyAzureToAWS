@@ -128,27 +128,27 @@ Metadata:
 Parameters:
   VpcId:
     Type: "AWS::EC2::VPC::Id"
-    Default: "vpc-074d839c8345db4b1"
-    AllowedValues: [vpc-074d839c8345db4b1]
+    Default: "vpc-0c8be400ab765b56e"
+    AllowedValues: [vpc-0c8be400ab765b56e]
   SubnetIds:
     Type: List<AWS::EC2::Subnet::Id>
     Description: Subnets for Lambda ENIs
-    Default: subnet-0ebbcd03f5592fa6a,subnet-0180ba237f6cef977
+    Default: subnet-065cb500695afe885,subnet-042116dfd36da667d
   SecurityGroupIds:
     Type: List<AWS::EC2::SecurityGroup::Id>
     Description: Security Groups for Lambda ENIs
-    Default: sg-024c327e33f14c354
-    AllowedValues: [sg-024c327e33f14c354]
+    Default: sg-0872c44365b8c6041
+    AllowedValues: [sg-0872c44365b8c6041]
   VpcEndpointIds:
     Type: List<String>
     Description: VPC Endpoint IDs for API Gateway Private integration
-    Default: "vpce-0049061188bfd9081"
-    AllowedValues: [vpce-0049061188bfd9081]
+    Default: "vpce-04399dbbb2ce81e23"
+    AllowedValues: [vpce-04399dbbb2ce81e23]
   Environment:
     Description: Environment type.
     Type: String
     AllowedValues: [dev, qa, prod]
-    Default: qa
+    Default: prod
   Client:
     Description: Client Info.
     Type: String
@@ -181,23 +181,15 @@ Parameters:
     Default: azure_to_aws
   PostgresConnectionUSReaderString:
     Type: String
-    Default: Server=qatch-db-us-qa-writer.iqor.qor.com;Port=5432;Database=qatch;User Id=qatchappreader;Password=mjY54g0ecNJcD6Km;ApplicationName=Azure_to_AWS_WebApi;timeout=60;
-    NoEcho: true                # ensures password is hidden in console/CLI
     Description: US Reader - Secure password input for connectionstring
   PostgresConnectionUSWriterString:
     Type: String
-    Default: Server=qatch-db-us-qa-writer.iqor.qor.com;Port=5432;Database=qatch;User Id=qatchappadmin;Password=g0U6137{(Kl6;ApplicationName=Azure_to_AWS_WebApi;timeout=60;
-    NoEcho: true                # ensures password is hidden in console/CLI
     Description: US Writer - Secure password input for connectionstring
   PostgresConnectionCAReaderString:
     Type: String
-    Default: Server=qatch-db-ca-qa-reader.iqor.qor.com;Port=5432;Database=qatch_qa;User Id=qatchappreader;Password=9V1yQ'2n/8^P;ApplicationName=Azure_to_AWS_WebApi;timeout=60;
-    NoEcho: true                # ensures password is hidden in console/CLI
     Description: CA Reader - Secure password input for connectionstring
   PostgresConnectionCAWriterString:
     Type: String
-    Default: Server=qatch-db-ca-qa-writer.iqor.qor.com;Port=5432;Database=qatch_qa;User Id=qatchappadmin;Password=j=9r}1[CA102;ApplicationName=Azure_to_AWS_WebApi;timeout=60;
-    NoEcho: true                # ensures password is hidden in console/CLI
     Description: CA Writer - Secure password input for connectionstring
   Description:
     Description: Description Info.
@@ -214,18 +206,18 @@ Parameters:
     Description: S3 bucket for US region
   USS3Bucket:
     Type: String
-    Default: awsuse1qas3qatch01
-    AllowedValues: [awsuse1qas3qatch01]
+    Default: awsuse1prdstqatch01
+    AllowedValues: [awsuse1prdstqatch01]
     Description: S3 bucket for US region
   CAS3Bucket:
     Type: String
-    Default: awscac1qas3qatch01
-    AllowedValues: [awscac1qas3qatch01]
+    Default: awscac1prds3qatch01
+    AllowedValues: [awscac1prds3qatch01]
     Description: S3 bucket for CA region
   S3BucketLambda:
     Type: String
-    Default: awsuse1qas3qatch01
-    AllowedValues: [awsuse1qas3qatch01]
+    Default: awsuse1prds3stgqatchcalls
+    AllowedValues: [awsuse1prds3stgqatchcalls]
     Description: S3 bucket where the lambda packages resides
   TableClientCountryKMSMap:
     Type: String
@@ -240,13 +232,13 @@ Parameters:
   ApiCustomDomainName:
     Type: String
     Description: Existing API Gateway custom domain name to map (must already exist)
-    Default: interactionmetadata-qa.iqor.com
-    AllowedValues: [interactionmetadata-qa.iqor.com]
+    Default: interactionmetadata.iqor.com
+    AllowedValues: [interactionmetadata.iqor.com]
   ApiCustomDomainNameArn:
     Type: String
     Description: Existing API Gateway custom domain name ARN to map (must already exist)
-    Default: arn:aws:apigateway:us-east-1:830044764036:/domainnames/interactionmetadata-qa.iqor.com+rngykjrorf
-    AllowedValues: [arn:aws:apigateway:us-east-1:830044764036:/domainnames/interactionmetadata-qa.iqor.com+rngykjrorf]
+    Default: arn:aws:apigateway:us-east-1:776483262511:/domainnames/interactionmetadata.iqor.com+6l8sijdym0
+    AllowedValues: [arn:aws:apigateway:us-east-1:776483262511:/domainnames/interactionmetadata.iqor.com+6l8sijdym0]
   ApiCustomDomainBasePath:
     Type: String
     Description: Base path to use (leave empty for root).
